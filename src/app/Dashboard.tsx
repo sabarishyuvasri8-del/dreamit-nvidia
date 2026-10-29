@@ -1,0 +1,8082 @@
+import { FormEvent, useEffect, useMemo, useRef, useState, useCallback, Suspense, lazy } from "react";
+import confetti from "canvas-confetti";
+import {
+  Activity,
+  AlarmClock,
+  AlertCircle,
+  ArrowRightLeft,
+  ArrowUpRight,
+  Award,
+  Bell,
+  Bold,
+  BookOpen,
+  BookOpenCheck,
+  Bot,
+  Brain,
+  Calendar,
+  CalendarDays,
+  Camera,
+  Check,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Circle,
+  Clock3,
+  Code,
+  Coffee,
+  Compass,
+  Copy,
+  Cloud,
+  Command,
+  Cpu,
+  Download,
+  Edit2,
+  FileText,
+  Flame,
+  Folder,
+  FolderPlus,
+  GraduationCap,
+  Heading1,
+  Heading2,
+  History,
+  Image as ImageIcon,
+  Inbox,
+  Italic,
+  Key,
+  Layers,
+  LayoutDashboard,
+  List,
+  LogOut,
+  Maximize2,
+  Menu,
+  Minimize2,
+  Moon,
+  MoreHorizontal,
+  MoreVertical,
+  Notebook,
+  MessageCircle,
+  MessageSquare,
+  PanelLeft,
+  Paperclip,
+  Pause,
+  Pencil,
+  Pin,
+  PinOff,
+  Play,
+  Plus,
+  Palette,
+  Quote,
+  RotateCcw,
+  Send,
+  Search,
+  Settings2,
+  Share,
+  Sparkles,
+  Star,
+  StickyNote,
+  Sun,
+  Target,
+  Timer,
+  Trash2,
+  Trophy,
+  UserCheck,
+  Users,
+  Wallet,
+  X,
+  Zap,
+  Loader2,
+  UploadCloud,
+} from "lucide-react";
+import {
+  AttachedFile,
+  calculateLevel,
+  createEmptyWorkspace,
+  deleteAttachedFile,
+  fetchUserFiles,
+  fetchUserWorkspace,
+  getWorkspaceOffline,
+  saveWorkspaceOffline,
+  Flashcard,
+  FocusLogEntry,
+  getFileDownloadUrl,
+  getLevelTitle,
+  getXPForNextLevel,
+  GradeEntry,
+  NoteEntry,
+  saveUserWorkspace,
+  StreakData,
+  Subject,
+  Task,
+  ScheduleItem,
+  UserWorkspace,
+  SharedNote,
+  shareNote,
+  fetchPendingShares,
+  respondToShare,
+  Friendship,
+  fetchFriends,
+  fetchPendingFriendRequests,
+  respondToFriendRequest,
+  sendFriendRequest,
+  deleteFriendship,
+  fetchUnreadMessageCount,
+  subscribeToDirectMessages,
+  upsertUserProfile,
+} from "../lib/supabase";
+const FinanceApp = lazy(() => import("./finance/FinanceApp"));
+const ExamSimulatorApp = lazy(() => import("./exams/ExamSimulatorApp"));
+import type { FinanceData, FinanceTransaction, FinanceProfile } from "../lib/finance-types";
+import { fetchAI } from "../lib/ai-client";
+import { FileUpload, formatFileSize } from "../components/FileUpload";
+import { useTheme } from "../lib/ThemeContext";
+import ThemeSelector from "./components/ThemeSelector";
+import VoiceInputButton from "./components/VoiceInputButton";
+import InboxModal from "./components/InboxModal";
+import FriendsModal from "./components/FriendsModal";
+import { useAppStore } from "../lib/store";
+import ChatModal from "./components/ChatModal";
+import {
+  isNotificationSupported,
+  getNotificationPermission,
+  requestNotificationPermission,
+  isTabInactive,
+  pushMessageNotification,
+  playNotificationChime,
+  isNotificationsMuted,
+} from "../lib/desktopNotifications";
+import { registerPushNotifications, isPushSupported } from "../lib/pushNotifications";
+import { useWebRTCCall } from "./components/calls/useWebRTCCall";
+import IncomingCallModal from "./components/calls/IncomingCallModal";
+import ActiveCallOverlay from "./components/calls/ActiveCallOverlay";
+import { AIThinkingStatus } from "./components/AIThinkingStatus";
+import { PWAInstallBanner } from "./components/PWAInstallBanner";
+import { OfflineSyncIndicator } from "./components/OfflineSyncIndicator";
+import { subscribePWAInstall, promptPWAInstall, isPWAInstalled } from "../lib/pwa";
+const PDFFlashcardModal = lazy(() =>
+  import("./flashcards/PDFFlashcardModal").then((m) => ({ default: m.PDFFlashcardModal }))
+);
+const MarkdownRenderer = lazy(() => import("./components/MarkdownRenderer"));
+const UserProfileModal = lazy(() => import("./components/UserProfileModal"));
+const AccountSwitcherModal = lazy(() => import("./components/AccountSwitcherModal"));
+const NotesTab = lazy(() => import("./components/tabs/NotesTab"));
+const SnapAndSolveModal = lazy(() => import("./components/SnapAndSolveModal"));
+import CommandPalette from "./components/CommandPalette";
+import { extractFilesFromClipboard } from "./utils/clipboardHelper";
+type Message = { role: "user" | "assistant"; content: string };
+
+export interface AIChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  subjectId: number | null;
+  messages: Message[];
+  isPinned?: boolean;
+}
+
+const weekDayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/** Get ISO date string for a date (YYYY-MM-DD) */
+function toDateKey(d: Date): string {
+  return d.toISOString().split("T")[0];
+}
+
+/** Render markdown content lazily with KaTeX and GFM support */
+function renderSimpleMarkdown(text: string, isUserMessage?: boolean) {
+  if (!text || !text.trim()) {
+    return <p className="text-xs italic py-8 text-center opacity-60">Nothing written yet. Switch to Edit mode to write your note!</p>;
+  }
+  return (
+    <Suspense fallback={<div className="animate-pulse bg-black/5 dark:bg-white/5 h-12 rounded-xl" />}>
+      <MarkdownRenderer content={text} compact={isUserMessage} />
+    </Suspense>
+  );
+}
+function getLast7Days(): string[] {
+  const days: string[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    days.push(toDateKey(d));
+  }
+  return days;
+}
+
+/** Format a date key to short label like "Mon 4" */
+function formatDayLabel(dateKey: string): string {
+  const d = new Date(dateKey + "T12:00:00");
+  const dayName = d.toLocaleDateString("en-US", { weekday: "short" });
+  const dayNum = d.getDate();
+  return `${dayName} ${dayNum}`;
+}
+
+function formatTime(seconds: number) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function formatStudyTime(minutes: number) {
+  if (!minutes) return "0m";
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return hours ? `${hours}h${remainder ? ` ${remainder}m` : ""}` : `${remainder}m`;
+}
+
+/** Days until a deadline */
+function daysUntil(dateStr: string): number {
+  const target = new Date(dateStr + "T23:59:59");
+  const now = new Date();
+  return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+/** Urgency color for deadlines */
+function deadlineColor(days: number): string {
+  if (days < 0) return "#8b3a30";
+  if (days <= 1) return "#e74c3c";
+  if (days <= 3) return "#f39c12";
+  return "#27ae60";
+}
+
+interface DashboardProps {
+  accessToken: string;
+  userId: string;
+  userEmail: string;
+  userName?: string;
+  userImageUrl?: string;
+  onSignOut: () => void;
+}
+
+const DEFAULT_WELCOME_MESSAGE: Message = {
+  role: "assistant",
+  content: "Welcome! I'm **Dream It AI**, your intelligent study assistant.\n\nAsk me study questions, math problems, code debugging, or attach files — I'm here to help you excel!",
+};
+
+function safeSaveSessionsToStorage(key: string, sessions: AIChatSession[]): boolean {
+  try {
+    localStorage.setItem(key, JSON.stringify(sessions));
+    return true;
+  } catch (e) {
+    try {
+      const sanitized = sessions.map((sess, idx) => {
+        if (idx === 0) return sess;
+        return {
+          ...sess,
+          messages: sess.messages.map((m) => ({
+            ...m,
+            content: m.content.replace(/!\[(.*?)\]\(data:image\/[^;]+;base64,[^)]+\)/g, "[Attached Image: $1]"),
+          })),
+        };
+      });
+      localStorage.setItem(key, JSON.stringify(sanitized));
+      return true;
+    } catch {
+      try {
+        const minimal = sessions.slice(0, 30).map((sess) => ({
+          ...sess,
+          messages: sess.messages.map((m) => ({
+            role: m.role,
+            content: m.content.replace(/!\[(.*?)\]\(data:image\/[^;]+;base64,[^)]+\)/g, "[Attached Image: $1]"),
+          })),
+        }));
+        localStorage.setItem(key, JSON.stringify(minimal));
+        return true;
+      } catch (err) {
+        console.warn("Storage full while saving sessions:", err);
+        return false;
+      }
+    }
+  }
+}
+
+function groupSessionsByDate(sessions: AIChatSession[]): { section: string; items: AIChatSession[] }[] {
+  // Only include sessions that have actual user messages (exclude empty new chat placeholders)
+  const validSessions = sessions
+    .filter((s) => s.messages && s.messages.some((m) => m.role === "user"))
+    .sort((a, b) => {
+      const timeDiff = (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+      if (timeDiff !== 0) return timeDiff;
+      return b.id.localeCompare(a.id);
+    });
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 86400000;
+  const startOf7Days = startOfToday - 6 * 86400000;
+  const startOf30Days = startOfToday - 29 * 86400000;
+
+  const pinned: AIChatSession[] = [];
+  const today: AIChatSession[] = [];
+  const yesterday: AIChatSession[] = [];
+  const last7Days: AIChatSession[] = [];
+  const last30Days: AIChatSession[] = [];
+  const older: AIChatSession[] = [];
+
+  for (const session of validSessions) {
+    if (session.isPinned) {
+      pinned.push(session);
+      continue;
+    }
+    const t = session.updatedAt || session.createdAt || 0;
+    if (t >= startOfToday) {
+      today.push(session);
+    } else if (t >= startOfYesterday) {
+      yesterday.push(session);
+    } else if (t >= startOf7Days) {
+      last7Days.push(session);
+    } else if (t >= startOf30Days) {
+      last30Days.push(session);
+    } else {
+      older.push(session);
+    }
+  }
+
+  const groups: { section: string; items: AIChatSession[] }[] = [];
+  if (pinned.length > 0) groups.push({ section: "Pinned", items: pinned });
+  if (today.length > 0) groups.push({ section: "Today", items: today });
+  if (yesterday.length > 0) groups.push({ section: "Yesterday", items: yesterday });
+  if (last7Days.length > 0) groups.push({ section: "Previous 7 Days", items: last7Days });
+  if (last30Days.length > 0) groups.push({ section: "Previous 30 Days", items: last30Days });
+  if (older.length > 0) groups.push({ section: "Older", items: older });
+
+  return groups;
+}
+
+export default function Dashboard({ accessToken, userId, userEmail, userName, userImageUrl, onSignOut }: DashboardProps) {
+  // ─── Main Data States ───
+  const tasks = useAppStore((state) => state.tasks);
+  const setTasks = useAppStore((state) => state.setTasks);
+  const scheduleItems = useAppStore((state) => state.scheduleItems);
+  const setScheduleItems = useAppStore((state) => state.setScheduleItems);
+  const subjects = useAppStore((state) => state.subjects);
+  const setSubjects = useAppStore((state) => state.setSubjects);
+  const notes = useAppStore((state) => state.notes);
+  const setNotes = useAppStore((state) => state.setNotes);
+  const grades = useAppStore((state) => state.grades);
+  const setGrades = useAppStore((state) => state.setGrades);
+  const flashcards = useAppStore((state) => state.flashcards);
+  const setFlashcards = useAppStore((state) => state.setFlashcards);
+  const [studyMinutes, setStudyMinutes] = useState<number[]>(Array(7).fill(0));
+  const [focusLog, setFocusLog] = useState<FocusLogEntry[]>([]);
+  const [streak, setStreak] = useState<StreakData>({
+    currentStreak: 0, longestStreak: 0, lastActiveDate: "",
+    totalXP: 0, level: 1, tasksCompleted: 0, focusSessionsCompleted: 0, flashcardsStudied: 0,
+  });
+  const [finance, setFinance] = useState<FinanceData | undefined>(undefined);
+
+  // ─── Sync & Status ───
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // ─── Toast Notification ───
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
+  const showToast = useCallback((message: string, type: "success" | "error" | "info" = "success") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  // ─── Navigation ───
+  type NavItem = "Today" | "Planner" | "Projects" | "Focus" | "Notes" | "Grades" | "Cards" | "Money" | "Exams";
+  const [activeNav, setActiveNav] = useState<NavItem>("Today");
+  const [selectedSubject, setSelectedSubject] = useState("All subjects");
+  const subjectFilterScrollRef = useRef<HTMLDivElement>(null);
+
+  const scrollSubjectFilter = (direction: "left" | "right") => {
+    if (subjectFilterScrollRef.current) {
+      const amount = direction === "left" ? -220 : 220;
+      subjectFilterScrollRef.current.scrollBy({ left: amount, behavior: "smooth" });
+    }
+  };
+  const [taskFilterStatus, setTaskFilterStatus] = useState<"all" | "active" | "completed">("all");
+  const [plannerViewMode, setPlannerViewMode] = useState<"timeline" | "kanban" | "calendar">("timeline");
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [isSidebarHovered, setIsSidebarHovered] = useState(false);
+
+  // ─── Modals ───
+  const [subjectsOpen, setSubjectsOpen] = useState(false);
+  const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
+  const [showKeyModal, setShowKeyModal] = useState(false);
+
+  // ─── File Attachments ───
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [filesModalSubject, setFilesModalSubject] = useState<Subject | null>(null);
+
+  // ─── Task Form ───
+  const [taskDraft, setTaskDraft] = useState("");
+  const [taskCourse, setTaskCourse] = useState("");
+  const [taskTime, setTaskTime] = useState("10:00 AM");
+  const [taskPriority, setTaskPriority] = useState<"low" | "medium" | "high">("medium");
+  const [taskDeadline, setTaskDeadline] = useState("");
+
+  // ─── Autopilot Taskmaster & Syllabus Engine ───
+  const [autopilotMode, setAutopilotMode] = useState<"quick" | "syllabus">("quick");
+  const [autopilotText, setAutopilotText] = useState("");
+  const [isSubmittingAutopilot, setIsSubmittingAutopilot] = useState(false);
+  const [syllabusExamName, setSyllabusExamName] = useState("CBSE Class 12 Boards");
+  const [syllabusExamDate, setSyllabusExamDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 21);
+    return d.toISOString().split("T")[0];
+  });
+  const [syllabusDailyHours, setSyllabusDailyHours] = useState(4);
+  const [syllabusText, setSyllabusText] = useState("");
+  const [syllabusFileName, setSyllabusFileName] = useState("");
+  const [isExtractingSyllabus, setIsExtractingSyllabus] = useState(false);
+
+  const [autopilotRuns, setAutopilotRuns] = useState<{
+    id: string;
+    timestamp: string;
+    status: "extracting" | "planning" | "pending_approval" | "executing" | "done" | "error";
+    isSyllabusRun?: boolean;
+    examName?: string;
+    examDate?: string;
+    daysRemaining?: number;
+    roadmapMilestones?: {
+      dayOffset: number;
+      countdownTag: string;
+      focusSubject: string;
+      title: string;
+      hours: number;
+      priority: "High" | "Medium" | "Low";
+      goals: string[];
+    }[];
+    pendingScheduleItems?: ScheduleItem[];
+    pendingTasks?: Task[];
+    extractedItems: {
+      title: string;
+      type: string;
+      priority?: string;
+      deadline?: string;
+      time?: string;
+      course?: string;
+      amount?: number;
+      front?: string;
+      back?: string;
+      score?: number;
+      total?: number;
+      weight?: number;
+      content?: string;
+      description?: string;
+      color?: string;
+      difficulty?: string;
+      assignmentName?: string;
+    }[];
+    createdTasks: string[];
+    createdSchedule: string[];
+    createdSubjects?: string[];
+    createdFlashcards?: string[];
+    createdGrades?: string[];
+    createdNotes?: string[];
+    createdFinance?: string[];
+    errorMsg?: string;
+  }[]>([]);
+
+  // ─── Schedule Form ───
+  const [planTitle, setPlanTitle] = useState("");
+  const [planTime, setPlanTime] = useState("09:00");
+  const [planNote, setPlanNote] = useState("");
+  const [planCourse, setPlanCourse] = useState("");
+
+  // ─── Subject Form ───
+  const [subjectDraft, setSubjectDraft] = useState("");
+  const [subjectColor, setSubjectColor] = useState("#c8d9e9");
+  const [subjectDesc, setSubjectDesc] = useState("");
+
+  // ─── Pomodoro ───
+  const [timerPreset, setTimerPreset] = useState<number>(25);
+  const [seconds, setSeconds] = useState(25 * 60);
+  const [isRunning, setIsRunning] = useState(false);
+  const [pomodoroSession, setPomodoroSession] = useState(0);
+  const [isBreak, setIsBreak] = useState(false);
+  const [activeFocusSeconds, setActiveFocusSeconds] = useState(0);
+
+  // ─── AI Chat — Dream It AI ───
+
+  const DEFAULT_WELCOME: Message = DEFAULT_WELCOME_MESSAGE;
+  const [messages, setMessages] = useState<Message[]>([DEFAULT_WELCOME_MESSAGE]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [isAsking, setIsAsking] = useState(false);
+  const [chatSubjectId, setChatSubjectId] = useState<number | null>(null);
+  const [isChatMaximized, setIsChatMaximized] = useState(false);
+  const [themeSelectorOpen, setThemeSelectorOpen] = useState(false);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const chatMaxContainerRef = useRef<HTMLDivElement>(null);
+
+  // ─── AI Chat Sessions / History ───
+  const [chatSessions, setChatSessions] = useState<AIChatSession[]>([]);
+  const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(null);
+  const activeChatSessionIdRef = useRef<string | null>(null);
+  activeChatSessionIdRef.current = activeChatSessionId;
+  const messagesRef = useRef<Message[]>([DEFAULT_WELCOME_MESSAGE]);
+  messagesRef.current = messages;
+  const [showPastChatsDrawer, setShowPastChatsDrawer] = useState(false);
+  const [wideSidebarOpen, setWideSidebarOpen] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.innerWidth >= 768;
+    }
+    return true;
+  });
+
+  // Ensure AI tutor chat sidebar is closed by default on smartphone screens
+  useEffect(() => {
+    if (isChatMaximized && typeof window !== "undefined" && window.innerWidth < 768) {
+      setWideSidebarOpen(false);
+    }
+  }, [isChatMaximized]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (typeof window !== "undefined" && window.innerWidth < 768 && wideSidebarOpen) {
+        setWideSidebarOpen(false);
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [wideSidebarOpen]);
+
+  // ─── AI Chat Message Actions (ChatGPT-style Copy, Share, Edit) ───
+  const [copiedMessageIdx, setCopiedMessageIdx] = useState<number | null>(null);
+  const [editingMessageIdx, setEditingMessageIdx] = useState<number | null>(null);
+  const [editingMessageDraft, setEditingMessageDraft] = useState("");
+
+  // ─── Chat Session Rename & 3-Dots Menu (ChatGPT/Claude style) ───
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renamingTitleDraft, setRenamingTitleDraft] = useState("");
+  const [openMenuSessionId, setOpenMenuSessionId] = useState<string | null>(null);
+
+  // Chronologically grouped sessions (Today, Yesterday, Previous 7 Days, Previous 30 Days, Older) — ChatGPT & Claude style
+  const groupedChatSessions = useMemo(() => groupSessionsByDate(chatSessions), [chatSessions]);
+
+
+
+  // ─── AI File Attachment & Drag-and-Drop ───
+  const [chatFile, setChatFile] = useState<{
+    id?: string;
+    name: string;
+    size: number;
+    type: string;
+    content: string;
+    isImage?: boolean;
+    isPdf?: boolean;
+    pageCount?: number;
+    base64?: string;
+    dataUrl?: string;
+  } | null>(null);
+  const [isExtractingChatFile, setIsExtractingChatFile] = useState(false);
+  const [isChatDraggingOver, setIsChatDraggingOver] = useState(false);
+  const chatDragCounterRef = useRef(0);
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+
+  // ─── Notes State ───
+  const activeNote = useAppStore((state) => state.activeNote);
+  const setActiveNote = useAppStore((state) => state.setActiveNote);
+  const noteDraft = useAppStore((state) => state.noteDraft);
+  const setNoteDraft = useAppStore((state) => state.setNoteDraft);
+  const noteTitleDraft = useAppStore((state) => state.noteTitleDraft);
+  const setNoteTitleDraft = useAppStore((state) => state.setNoteTitleDraft);
+  const noteSubjectFilter = useAppStore((state) => state.noteSubjectFilter);
+  const setNoteSubjectFilter = useAppStore((state) => state.setNoteSubjectFilter);
+  const noteSubjectId = useAppStore((state) => state.noteSubjectId);
+  const setNoteSubjectId = useAppStore((state) => state.setNoteSubjectId);
+  const noteSearchQuery = useAppStore((state) => state.noteSearchQuery);
+  const setNoteSearchQuery = useAppStore((state) => state.setNoteSearchQuery);
+  const noteMode = useAppStore((state) => state.noteMode);
+  const setNoteMode = useAppStore((state) => state.setNoteMode);
+  const isSummarizingNote = useAppStore((state) => state.isSummarizingNote);
+  const setIsSummarizingNote = useAppStore((state) => state.setIsSummarizingNote);
+  const noteTextAreaRef = useRef<HTMLTextAreaElement>(null);
+
+  // ─── Inbox / Sharing State ───
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const pendingShares = useAppStore((state) => state.pendingShares);
+  const setPendingShares = useAppStore((state) => state.setPendingShares);
+  const [shareNoteModalOpen, setShareNoteModalOpen] = useState(false);
+  const [noteToShare, setNoteToShare] = useState<NoteEntry | null>(null);
+  const [shareRecipientIdentifier, setShareRecipientIdentifier] = useState("");
+  const [isSharing, setIsSharing] = useState(false);
+
+  // ─── Friends System ───
+  const [friendsModalOpen, setFriendsModalOpen] = useState(false);
+  const friends = useAppStore((state) => state.friends);
+  const setFriends = useAppStore((state) => state.setFriends);
+  const pendingFriendRequests = useAppStore((state) => state.pendingFriendRequests);
+  const setPendingFriendRequests = useAppStore((state) => state.setPendingFriendRequests);
+  const [addFriendDraft, setAddFriendDraft] = useState("");
+  const [isAddingFriend, setIsAddingFriend] = useState(false);
+  const [chatModalOpen, setChatModalOpen] = useState(false);
+  const [chatInitialFriendId, setChatInitialFriendId] = useState<string | null>(null);
+  const [showNotifBanner, setShowNotifBanner] = useState(false);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
+  const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
+
+  // ─── Grades State ───
+  const [gradeForm, setGradeForm] = useState({ subjectId: 0, name: "", score: "", total: "", weight: "" });
+
+  // ─── Flashcards State ───
+  const [cardForm, setCardForm] = useState({ subjectId: 0, front: "", back: "" });
+  const [studyingCards, setStudyingCards] = useState(false);
+  const [currentCardIndex, setCurrentCardIndex] = useState(0);
+  const [cardFlipped, setCardFlipped] = useState(false);
+  const [cardSubjectFilter, setCardSubjectFilter] = useState<number | null>(null);
+
+  // ─── AI PDF Flashcard Generator State ───
+  const [pdfFlashcardModalOpen, setPdfFlashcardModalOpen] = useState(false);
+  const [pdfModalFile, setPdfModalFile] = useState<AttachedFile | null>(null);
+  const [pdfModalNote, setPdfModalNote] = useState<NoteEntry | null>(null);
+  const [pdfModalSubjectId, setPdfModalSubjectId] = useState<number | null>(null);
+
+  // ─── Snap & Solve Multimodal Assistant State ───
+  const [snapModalOpen, setSnapModalOpen] = useState(false);
+
+  // ─── Global Command Palette (Cmd + K / Ctrl + K) ───
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+      } else if (e.key === "Escape") {
+        setIsChatMaximized(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // ─── Theme (via ThemeContext) ───
+  const { theme: currentThemeId, themeConfig, isDark: darkMode } = useTheme();
+  
+  // ─── Profile Modal ───
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+
+  // ─── PWA Installation State ───
+  const [canInstallPWA, setCanInstallPWA] = useState(false);
+  useEffect(() => {
+    if (isPWAInstalled()) return;
+    const unsub = subscribePWAInstall((installable) => {
+      setCanInstallPWA(installable);
+    });
+    return () => unsub();
+  }, []);
+
+  // ─── Derived User Display ───
+  const userNameDisplay = useMemo(() => {
+    if (userName) return userName;
+    if (!userEmail) return "Student";
+    const namePart = userEmail.split("@")[0];
+    return namePart.charAt(0).toUpperCase() + namePart.slice(1);
+  }, [userName, userEmail]);
+
+  // ─── P2P WebRTC Friends Calling (Zero Storage) ───
+  const callManager = useWebRTCCall(userId, userNameDisplay, userImageUrl);
+
+  // ─── XP Helper ───
+  const addXP = useCallback((amount: number) => {
+    setStreak((prev) => {
+      const newXP = prev.totalXP + amount;
+      const newLevel = calculateLevel(newXP);
+      return { ...prev, totalXP: newXP, level: newLevel };
+    });
+  }, []);
+
+  // ─── Update Streak on Activity ───
+  const updateDailyStreak = useCallback(() => {
+    const todayKey = toDateKey(new Date());
+    setStreak((prev) => {
+      if (prev.lastActiveDate === todayKey) return prev;
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayKey = toDateKey(yesterday);
+      const newStreak = prev.lastActiveDate === yesterdayKey ? prev.currentStreak + 1 : 1;
+      return {
+        ...prev,
+        currentStreak: newStreak,
+        longestStreak: Math.max(prev.longestStreak, newStreak),
+        lastActiveDate: todayKey,
+      };
+    });
+  }, []);
+
+  // ─── Auto-scroll chat ───
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+    if (chatMaxContainerRef.current) {
+      chatMaxContainerRef.current.scrollTop = chatMaxContainerRef.current.scrollHeight;
+    }
+  }, [messages, isAsking, isChatMaximized]);
+
+  // ─── Global Drag & Drop Prevention (Stop browser from navigating away on dropped files) ───
+  useEffect(() => {
+    const handleGlobalDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    const handleGlobalDrop = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("dragover", handleGlobalDragOver);
+    window.addEventListener("drop", handleGlobalDrop);
+    return () => {
+      window.removeEventListener("dragover", handleGlobalDragOver);
+      window.removeEventListener("drop", handleGlobalDrop);
+    };
+  }, []);
+
+  // ─── Load workspace (Optimistic Instant Hydration) ───
+  useEffect(() => {
+    let alive = true;
+
+    // Instant 0ms hydration from high-capacity IndexedDB
+    if (userId) {
+      getWorkspaceOffline(userId).then((cached) => {
+        if (!alive || !cached) return;
+        if (Array.isArray(cached.tasks)) setTasks(cached.tasks);
+        if (Array.isArray(cached.scheduleItems)) setScheduleItems(cached.scheduleItems);
+        if (Array.isArray(cached.subjects)) setSubjects(cached.subjects);
+        if (Array.isArray(cached.studyMinutes) && cached.studyMinutes.length === 7) setStudyMinutes(cached.studyMinutes);
+        if (Array.isArray(cached.focusLog)) setFocusLog(cached.focusLog);
+        const loadedCachedSubs = Array.isArray(cached.subjects) ? cached.subjects : [];
+        let loadedCachedNotes = Array.isArray(cached.notes) ? cached.notes : [];
+        const chemCached = loadedCachedSubs.find(s => s.name.toLowerCase() === "chemistry");
+        if (chemCached && loadedCachedNotes.filter(n => n.subjectId === chemCached.id).length === 0) {
+          const seedNote: NoteEntry = {
+            id: "note_chem_fblock_seed",
+            subjectId: chemCached.id,
+            title: "Chapter: f-Block Elements & Coordination/d-Block Compounds",
+            content: `# Chapter: f-Block Elements & Coordination/d-Block Compounds\n\n## 1. Lanthanoids vs. Actinoids Summary\n- **Lanthanoids (4f-series):**\n  - **Oxidation States:** Primarily +3 (some show +2 and +4).\n  - **Complex Formation:** Low tendency (larger size, lower charge/radius ratio).\n  - **Color:** Colored ions due to $4f - 4f$ electronic transitions.\n  - **Radioactivity:** Non-radioactive (except Promethium, Pm).\n- **Actinoids (5f-series):**\n  - **Oxidation States:** Wide range up to +7 (due to small energy gaps between $5f, 6d, 7s$).\n  - **Complex Formation:** High tendency (smaller size, higher nuclear charge).\n  - **Color:** Colored ions due to $5f - 5f$ transitions.\n  - **Radioactivity:** All elements are radioactive.\n\n---\n\n## 2. Industrial Preparation of Potassium Dichromate ($K_2Cr_2O_7$)\n1. **Fusion:**\n   $$4FeCr_2O_4 + 8Na_2CO_3 + 7O_2 \\xrightarrow{\\text{Fusion}} 8Na_2CrO_4 + 2Fe_2O_3 + 8CO_2$$\n   *(Chromite ore + Sodium carbonate + Air $\\rightarrow$ Yellow Sodium Chromate)*\n2. **Acidification:**\n   $$2Na_2CrO_4 + H_2SO_4 \\rightarrow Na_2Cr_2O_7 + Na_2SO_4 + H_2O$$\n   *(Sodium Chromate + Acid $\\rightarrow$ Orange Sodium Dichromate)*\n3. **Metathesis / Precipitation:**\n   $$Na_2Cr_2O_7 + 2KCl \\rightarrow K_2Cr_2O_7\\downarrow + 2NaCl$$\n   *(Sodium Dichromate + Potassium Chloride $\\rightarrow$ Less soluble $K_2Cr_2O_7$ crystals precipitate out)*`,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          loadedCachedNotes = [seedNote, ...loadedCachedNotes];
+        }
+        if (Array.isArray(cached.notes)) setNotes(loadedCachedNotes);
+        if (Array.isArray(cached.grades)) setGrades(cached.grades);
+        if (Array.isArray(cached.flashcards)) setFlashcards(cached.flashcards);
+        if (cached.streak) setStreak(cached.streak);
+        if (cached.finance) setFinance(cached.finance);
+        setWorkspaceReady(true);
+      });
+    }
+
+    fetchUserWorkspace(accessToken, userId)
+      .then((workspace) => {
+        if (!alive) return;
+        if (workspace) {
+          setTasks(Array.isArray(workspace.tasks) ? workspace.tasks : []);
+          setScheduleItems(Array.isArray(workspace.scheduleItems) ? workspace.scheduleItems : []);
+          const currentSubs = Array.isArray(workspace.subjects) ? workspace.subjects : [];
+          setSubjects(currentSubs);
+          setStudyMinutes(
+            Array.isArray(workspace.studyMinutes) && workspace.studyMinutes.length === 7
+              ? workspace.studyMinutes
+              : Array(7).fill(0)
+          );
+          setFocusLog(Array.isArray(workspace.focusLog) ? workspace.focusLog : []);
+          
+          let currentNotes = Array.isArray(workspace.notes) ? workspace.notes : [];
+          const chemSub = currentSubs.find(s => s.name.toLowerCase() === "chemistry");
+          if (chemSub && currentNotes.filter(n => n.subjectId === chemSub.id).length === 0) {
+            const seedNote: NoteEntry = {
+              id: "note_chem_fblock_seed",
+              subjectId: chemSub.id,
+              title: "Chapter: f-Block Elements & Coordination/d-Block Compounds",
+              content: `# Chapter: f-Block Elements & Coordination/d-Block Compounds\n\n## 1. Lanthanoids vs. Actinoids Summary\n- **Lanthanoids (4f-series):**\n  - **Oxidation States:** Primarily +3 (some show +2 and +4).\n  - **Complex Formation:** Low tendency (larger size, lower charge/radius ratio).\n  - **Color:** Colored ions due to $4f - 4f$ electronic transitions.\n  - **Radioactivity:** Non-radioactive (except Promethium, Pm).\n- **Actinoids (5f-series):**\n  - **Oxidation States:** Wide range up to +7 (due to small energy gaps between $5f, 6d, 7s$).\n  - **Complex Formation:** High tendency (smaller size, higher nuclear charge).\n  - **Color:** Colored ions due to $5f - 5f$ transitions.\n  - **Radioactivity:** All elements are radioactive.\n\n---\n\n## 2. Industrial Preparation of Potassium Dichromate ($K_2Cr_2O_7$)\n1. **Fusion:**\n   $$4FeCr_2O_4 + 8Na_2CO_3 + 7O_2 \\xrightarrow{\\text{Fusion}} 8Na_2CrO_4 + 2Fe_2O_3 + 8CO_2$$\n   *(Chromite ore + Sodium carbonate + Air $\\rightarrow$ Yellow Sodium Chromate)*\n2. **Acidification:**\n   $$2Na_2CrO_4 + H_2SO_4 \\rightarrow Na_2Cr_2O_7 + Na_2SO_4 + H_2O$$\n   *(Sodium Chromate + Acid $\\rightarrow$ Orange Sodium Dichromate)*\n3. **Metathesis / Precipitation:**\n   $$Na_2Cr_2O_7 + 2KCl \\rightarrow K_2Cr_2O_7\\downarrow + 2NaCl$$\n   *(Sodium Dichromate + Potassium Chloride $\\rightarrow$ Less soluble $K_2Cr_2O_7$ crystals precipitate out)*`,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            currentNotes = [seedNote, ...currentNotes];
+          }
+          setNotes(currentNotes);
+          setGrades(Array.isArray(workspace.grades) ? workspace.grades : []);
+          setFlashcards(Array.isArray(workspace.flashcards) ? workspace.flashcards : []);
+          if (workspace.streak) setStreak(workspace.streak);
+          if (workspace.finance) setFinance(workspace.finance);
+          // Check if truly new user (all empty)
+          if (
+            (!workspace.tasks || workspace.tasks.length === 0) &&
+            (!workspace.subjects || workspace.subjects.length === 0) &&
+            (!workspace.notes || workspace.notes.length === 0)
+          ) {
+            setShowOnboarding(true);
+          }
+        } else {
+          // Brand new user — completely empty workspace
+          const empty = createEmptyWorkspace();
+          setTasks(empty.tasks);
+          setScheduleItems(empty.scheduleItems);
+          setSubjects(empty.subjects);
+          setStudyMinutes(empty.studyMinutes);
+          setFocusLog(empty.focusLog!);
+          setNotes(empty.notes!);
+          setGrades(empty.grades!);
+          setFlashcards(empty.flashcards!);
+          setStreak(empty.streak!);
+          setFinance(empty.finance);
+          setShowOnboarding(true);
+        }
+      })
+      .catch((err) => console.warn("Failed loading workspace:", err))
+      .finally(() => {
+        if (alive) setWorkspaceReady(true);
+      });
+
+    return () => { alive = false; };
+  }, [accessToken, userId]);
+
+  // ─── Load file attachments ───
+  useEffect(() => {
+    let alive = true;
+    fetchUserFiles(accessToken, userId)
+      .then((files) => { if (alive) setAttachedFiles(files); })
+      .catch((err) => console.warn("Failed fetching user files:", err));
+    return () => { alive = false; };
+  }, [accessToken, userId]);
+
+  // ─── Load Inbox & Friends ───
+  const checkInbox = useCallback(async () => {
+    if (!userNameDisplay && !userEmail) return;
+    const [shares, requests, unreadCount] = await Promise.all([
+      fetchPendingShares(userNameDisplay, userEmail),
+      fetchPendingFriendRequests(userNameDisplay, userEmail),
+      userId ? fetchUnreadMessageCount(userId) : Promise.resolve(0)
+    ]);
+    setPendingShares(shares);
+    setPendingFriendRequests(requests);
+    setUnreadMessageCount(unreadCount);
+  }, [userNameDisplay, userEmail, userId]);
+
+  const loadFriends = useCallback(async () => {
+    if (!userId) return;
+    const f = await fetchFriends(userId);
+    setFriends(f);
+  }, [userId]);
+
+  // ─── Auto-sync Profile Picture ───
+  useEffect(() => {
+    if (userId && userNameDisplay) {
+      upsertUserProfile(userId, userNameDisplay, userImageUrl);
+    }
+  }, [userId, userNameDisplay, userImageUrl]);
+
+  const friendsRef = useRef(friends);
+  friendsRef.current = friends;
+  const chatModalOpenRef = useRef(chatModalOpen);
+  chatModalOpenRef.current = chatModalOpen;
+
+  useEffect(() => {
+    checkInbox();
+    loadFriends();
+    
+    // Poll every 30 seconds for new notes & requests
+    const interval = window.setInterval(checkInbox, 30000);
+    
+    // Listen for real-time messages across the whole application
+    let unsubscribe: () => void = () => {};
+    if (userId) {
+      unsubscribe = subscribeToDirectMessages(userId, (newMsg) => {
+        // If we receive a new message directed at us
+        if (newMsg.receiver_id === userId && !newMsg.is_read) {
+          checkInbox();
+
+          // Resolve sender friend display information
+          const currentFriends = friendsRef.current;
+          const senderFriend = currentFriends.find(
+            (f) => f.requester_id === newMsg.sender_id || f.target_id === newMsg.sender_id
+          );
+          const senderName = senderFriend
+            ? (senderFriend.requester_id === newMsg.sender_id
+                ? senderFriend.requester_identifier
+                : (senderFriend.target_actual_identifier || senderFriend.target_identifier || "Friend"))
+            : "A friend";
+
+          const inactive = isTabInactive();
+
+          // If the user is on another tab, push outside notification!
+          if (inactive) {
+            pushMessageNotification({
+              message: newMsg,
+              senderName,
+              onOpenChat: (friendId) => {
+                setChatInitialFriendId(friendId);
+                setChatModalOpen(true);
+              },
+            });
+          } else if (!chatModalOpenRef.current && !isNotificationsMuted()) {
+            // User is in Dream It on this tab, but chat modal is closed
+            playNotificationChime();
+            showToast(`💬 ${senderName}: ${newMsg.content || "Sent an attachment"}`, "info");
+          }
+        }
+      });
+    }
+
+    return () => {
+      window.clearInterval(interval);
+      unsubscribe();
+    };
+  }, [checkInbox, loadFriends, userId, showToast]);
+
+  // ─── Outside Notification Click & Custom Event Listener ───
+  useEffect(() => {
+    const handleOpenChat = (e: any) => {
+      const friendId = e.detail?.friendId;
+      if (friendId) {
+        setChatInitialFriendId(friendId);
+      }
+      setChatModalOpen(true);
+    };
+    window.addEventListener("dreamit:open-chat", handleOpenChat);
+
+    try {
+      const url = new URL(window.location.href);
+      const openChatFriendId = url.searchParams.get("openChat");
+      if (openChatFriendId) {
+        setChatInitialFriendId(openChatFriendId);
+        setChatModalOpen(true);
+        url.searchParams.delete("openChat");
+        window.history.replaceState({}, document.title, url.pathname + (url.search ? url.search : ""));
+      }
+    } catch {}
+
+    return () => window.removeEventListener("dreamit:open-chat", handleOpenChat);
+  }, []);
+
+  // ─── Desktop & Lock-Screen Notification Permission Prompt & Auto-Sync ───
+  useEffect(() => {
+    if (isNotificationSupported() && getNotificationPermission() === "default") {
+      const dismissed = localStorage.getItem("dreamit_notif_banner_dismissed");
+      if (!dismissed) {
+        const timer = setTimeout(() => setShowNotifBanner(true), 3000);
+        return () => clearTimeout(timer);
+      }
+    } else if (isNotificationSupported() && getNotificationPermission() === "granted" && userId) {
+      if (!isNotificationsMuted()) {
+        registerPushNotifications(userId).catch(() => {});
+      }
+    }
+  }, [userId]);
+
+  const handleEnableNotifications = async () => {
+    setShowNotifBanner(false);
+    if (isPushSupported() && userId) {
+      const res = await registerPushNotifications(userId);
+      if (res.success) {
+        showToast("🔔 Lock-screen & background notifications enabled for this device!", "success");
+        playNotificationChime();
+      } else {
+        showToast("Notifications not enabled. You can enable them anytime from Messages.", "info");
+      }
+    } else {
+      const res = await requestNotificationPermission();
+      if (res === "granted") {
+        showToast("🎉 Desktop notifications enabled! You'll get alerts in other tabs.", "success");
+        playNotificationChime();
+      } else {
+        showToast("Notifications not enabled. You can enable them anytime from Messages.", "info");
+      }
+    }
+  };
+
+  const handleDismissNotifBanner = () => {
+    setShowNotifBanner(false);
+    localStorage.setItem("dreamit_notif_banner_dismissed", "true");
+  };
+
+  // ─── Auto-save workspace (debounced with 0ms input latency & de-duplication) ───
+  const lastSavedJsonRef = useRef<string>("");
+  useEffect(() => {
+    if (!workspaceReady) return;
+    const saveTimer = window.setTimeout(async () => {
+      const payload: UserWorkspace = {
+        tasks, scheduleItems, subjects, studyMinutes, focusLog,
+        notes, grades, flashcards, streak, finance
+      };
+      const serialized = JSON.stringify(payload);
+      if (serialized === lastSavedJsonRef.current) return;
+      lastSavedJsonRef.current = serialized;
+      setIsSaving(true);
+      await saveUserWorkspace(accessToken, userId, payload);
+      setIsSaving(false);
+      setLastSavedTime(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    }, 1000);
+    return () => window.clearTimeout(saveTimer);
+  }, [accessToken, userId, workspaceReady, tasks, scheduleItems, subjects, studyMinutes, focusLog, notes, grades, flashcards, streak, finance]);
+
+  // ─── Force Cloud Sync (invoked upon network reconnect or manually) ───
+  const handleForceSync = useCallback(async () => {
+    if (!userId || !workspaceReady) return;
+    setIsSaving(true);
+    const payload: UserWorkspace = {
+      tasks, scheduleItems, subjects, studyMinutes, focusLog,
+      notes, grades, flashcards, streak, finance
+    };
+    const success = await saveUserWorkspace(accessToken, userId, payload);
+    setIsSaving(false);
+    if (success) {
+      setLastSavedTime(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    }
+  }, [accessToken, userId, workspaceReady, tasks, scheduleItems, subjects, studyMinutes, focusLog, notes, grades, flashcards, streak, finance]);
+
+  // ─── Automatic PWA Offline Sync upon Network Reconnect ───
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log("[PWA] Network reconnected — syncing local workspace to Supabase...");
+      handleForceSync();
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, [handleForceSync]);
+
+  // ─── Emergency Save Flush on Tab Close / Page Unload ───
+  useEffect(() => {
+    const handleFlush = () => {
+      if (!userId || !workspaceReady) return;
+      const payload: UserWorkspace = {
+        tasks, scheduleItems, subjects, studyMinutes, focusLog,
+        notes, grades, flashcards, streak, finance
+      };
+      const serialized = JSON.stringify(payload);
+      if (serialized === lastSavedJsonRef.current) return;
+      lastSavedJsonRef.current = serialized;
+      saveUserWorkspace(accessToken, userId, payload).catch(() => {});
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        handleFlush();
+      }
+    };
+
+    window.addEventListener("beforeunload", handleFlush);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("beforeunload", handleFlush);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [accessToken, userId, workspaceReady, tasks, scheduleItems, subjects, studyMinutes, focusLog, notes, grades, flashcards, streak, finance]);
+
+  // ─── Pomodoro Focus Tracking & Timer ───
+  useEffect(() => {
+    if (!isRunning || seconds === 0) return;
+    const timer = window.setInterval(() => {
+      setSeconds((val) => Math.max(0, val - 1));
+
+      // Real-time synchronization: sync focus time with every timer tick during focus sessions
+      if (!isBreak) {
+        setActiveFocusSeconds((prevSec) => {
+          const nextSec = prevSec + 1;
+          if (nextSec >= 60) {
+            // 60 seconds elapsed: persist 1 minute immediately to studyMinutes and focusLog
+            const todayIndex = (new Date().getDay() + 6) % 7;
+            setStudyMinutes((curr) =>
+              curr.map((m, idx) => (idx === todayIndex ? m + 1 : m))
+            );
+
+            const todayKey = toDateKey(new Date());
+            setFocusLog((prevLog) => {
+              const existing = prevLog.find((e) => e.date === todayKey);
+              if (existing) {
+                return prevLog.map((e) => (e.date === todayKey ? { ...e, minutes: e.minutes + 1 } : e));
+              }
+              return [...prevLog, { date: todayKey, minutes: 1 }];
+            });
+
+            addXP(2);
+            updateDailyStreak();
+            return 0; // reset active seconds accumulator for the next minute
+          }
+          return nextSec;
+        });
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [isRunning, isBreak, addXP, updateDailyStreak]);
+
+  // Session completion effect
+  useEffect(() => {
+    if (seconds !== 0 || !isRunning) return;
+    setIsRunning(false);
+
+    if (isBreak) {
+      // Break over — back to focus
+      setIsBreak(false);
+      setSeconds(timerPreset * 60);
+      showToast("Break's over! Ready for another focus session? 🎯", "info");
+      return;
+    }
+
+    // Focus session complete!
+    confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+
+    // Flush any remaining activeFocusSeconds (round up if >= 30s)
+    if (activeFocusSeconds >= 30) {
+      const todayIndex = (new Date().getDay() + 6) % 7;
+      setStudyMinutes((curr) => curr.map((m, idx) => (idx === todayIndex ? m + 1 : m)));
+      const todayKey = toDateKey(new Date());
+      setFocusLog((prevLog) => {
+        const existing = prevLog.find((e) => e.date === todayKey);
+        if (existing) return prevLog.map((e) => (e.date === todayKey ? { ...e, minutes: e.minutes + 1 } : e));
+        return [...prevLog, { date: todayKey, minutes: 1 }];
+      });
+      addXP(2);
+    }
+    setActiveFocusSeconds(0);
+
+    // Completion bonus XP & streak
+    addXP(10);
+    updateDailyStreak();
+    setStreak((p) => ({ ...p, focusSessionsCompleted: p.focusSessionsCompleted + 1 }));
+
+    const newSession = pomodoroSession + 1;
+    setPomodoroSession(newSession);
+
+    // Auto-start break
+    const breakTime = newSession % 4 === 0 ? 15 : 5;
+    setIsBreak(true);
+    setSeconds(breakTime * 60);
+    showToast(`🎉 Focus session complete! Starting ${breakTime}min break...`, "success");
+  }, [seconds, isRunning, timerPreset, isBreak, pomodoroSession, activeFocusSeconds, addXP, updateDailyStreak, showToast]);
+
+  const flushActiveFocusTime = () => {
+    if (activeFocusSeconds >= 30) {
+      const todayIndex = (new Date().getDay() + 6) % 7;
+      setStudyMinutes((curr) => curr.map((m, idx) => (idx === todayIndex ? m + 1 : m)));
+      const todayKey = toDateKey(new Date());
+      setFocusLog((prevLog) => {
+        const existing = prevLog.find((e) => e.date === todayKey);
+        if (existing) return prevLog.map((e) => (e.date === todayKey ? { ...e, minutes: e.minutes + 1 } : e));
+        return [...prevLog, { date: todayKey, minutes: 1 }];
+      });
+      addXP(2);
+      updateDailyStreak();
+    }
+    setActiveFocusSeconds(0);
+  };
+
+  const changeTimerPreset = (mins: number) => {
+    flushActiveFocusTime();
+    setTimerPreset(mins);
+    setSeconds(mins * 60);
+    setIsRunning(false);
+    setIsBreak(false);
+  };
+
+  const handleResetTimer = () => {
+    flushActiveFocusTime();
+    setSeconds(timerPreset * 60);
+    setIsRunning(false);
+    setIsBreak(false);
+  };
+
+  // ─── Computations ───
+  const filteredTasks = useMemo(() => {
+    return tasks.filter((task) => {
+      const matchSubject = selectedSubject === "All subjects" || task.course === selectedSubject;
+      const matchStatus = taskFilterStatus === "all" ? true : taskFilterStatus === "active" ? !task.done : task.done;
+      return matchSubject && matchStatus;
+    });
+  }, [tasks, selectedSubject, taskFilterStatus]);
+
+  // Fast O(1) task counts per course for instant rendering on low-RAM devices
+  const openTaskCountByCourse = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i];
+      if (!t.done && t.course) {
+        map.set(t.course, (map.get(t.course) || 0) + 1);
+      }
+    }
+    return map;
+  }, [tasks]);
+
+  // Precomputed project metrics in single O(N) pass
+  const projectStatsByCourse = useMemo(() => {
+    const map = new Map<string, { total: number; open: number; done: number; pct: number }>();
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i];
+      if (!t.course) continue;
+      let entry = map.get(t.course);
+      if (!entry) {
+        entry = { total: 0, open: 0, done: 0, pct: 0 };
+        map.set(t.course, entry);
+      }
+      entry.total++;
+      if (t.done) entry.done++;
+      else entry.open++;
+    }
+    map.forEach((entry) => {
+      entry.pct = entry.total ? Math.round((entry.done / entry.total) * 100) : 0;
+    });
+    return map;
+  }, [tasks]);
+
+  // Fast note count by subject ID
+  const noteCountBySubject = useMemo(() => {
+    const map = new Map<number, number>();
+    for (let i = 0; i < notes.length; i++) {
+      const sId = notes[i].subjectId;
+      map.set(sId, (map.get(sId) || 0) + 1);
+    }
+    return map;
+  }, [notes]);
+
+  const completeCount = tasks.filter((t) => t.done).length;
+  const progress = tasks.length ? Math.round((completeCount / tasks.length) * 100) : 0;
+  const totalSeconds = (isBreak ? (pomodoroSession % 4 === 0 ? 15 : 5) : timerPreset) * 60;
+  const focusProgress = Math.round(((totalSeconds - seconds) / totalSeconds) * 100);
+  const circleDash = 314 - (314 * focusProgress) / 100;
+
+  const [weeklyGoalHours, setWeeklyGoalHours] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("dreamit_weekly_goal_hours") || localStorage.getItem("morrow_weekly_goal_hours");
+      if (saved) return parseInt(saved, 10) || 12;
+    }
+    return 12;
+  });
+
+  const last7Days = useMemo(() => getLast7Days(), []);
+  // Throttled: recalculates on minute boundaries or status changes to eliminate 1-second render churn
+  const activeFocusQuarterMinute = Math.floor(activeFocusSeconds / 15);
+  const graphData = useMemo(() => {
+    const todayKey = toDateKey(new Date());
+    return last7Days.map((dateKey) => {
+      const entry = focusLog.find((e) => e.date === dateKey);
+      const isToday = dateKey === todayKey;
+      const baseMinutes = entry ? entry.minutes : 0;
+      const liveFraction = isToday && isRunning && !isBreak ? activeFocusQuarterMinute * 0.25 : 0;
+      const effectiveMinutes = baseMinutes + liveFraction;
+      return {
+        dateKey,
+        label: formatDayLabel(dateKey),
+        minutes: baseMinutes,
+        effectiveMinutes,
+        isToday,
+        isTimerActive: isToday && isRunning && !isBreak,
+      };
+    });
+  }, [last7Days, focusLog, isRunning, isBreak, activeFocusQuarterMinute]);
+
+  // Scaled dynamically to provide meaningful visual feedback as soon as focus starts
+  const graphMaxMinutes = useMemo(() => {
+    const maxVal = Math.max(...graphData.map((d) => d.effectiveMinutes || d.minutes), 0);
+    if (maxVal <= 25) return 30; // 30m scale so 25m Pomodoro fills over 80% of bar
+    if (maxVal <= 60) return 60; // 1-hour scale
+    if (maxVal <= 120) return 120; // 2-hour scale
+    return Math.ceil(maxVal / 60) * 60;
+  }, [graphData]);
+
+  const totalLoggedMinutes = useMemo(() => graphData.reduce((sum, d) => sum + d.minutes, 0), [graphData]);
+  const weeklyStudyMinutes = totalLoggedMinutes;
+  const focusTargetMinutes = weeklyGoalHours * 60;
+  const targetProgress = focusTargetMinutes > 0 ? Math.min(100, Math.round((weeklyStudyMinutes / focusTargetMinutes) * 100)) : 0;
+  const totalSessions = useMemo(() => Math.max(streak.focusSessionsCompleted, Math.ceil(totalLoggedMinutes / 25)), [streak.focusSessionsCompleted, totalLoggedMinutes]);
+  const todayMinutes = useMemo(() => {
+    const todayEntry = focusLog.find((e) => e.date === toDateKey(new Date()));
+    return todayEntry ? todayEntry.minutes : 0;
+  }, [focusLog]);
+  const streakDays = useMemo(() => {
+    let s = 0;
+    for (let i = graphData.length - 1; i >= 0; i--) {
+      if (graphData[i].minutes > 0) s++;
+      else break;
+    }
+    return s;
+  }, [graphData]);
+
+  const dayGreeting = useMemo(() => {
+    const hour = new Date().getHours();
+    return hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  }, []);
+
+  // Upcoming deadlines
+  const upcomingDeadlines = useMemo(() => {
+    return tasks
+      .filter((t) => t.deadline && !t.done)
+      .map((t) => ({ ...t, daysLeft: daysUntil(t.deadline!) }))
+      .sort((a, b) => a.daysLeft - b.daysLeft)
+      .slice(0, 5);
+  }, [tasks]);
+
+  // Grade calculations
+  const subjectGPAs = useMemo(() => {
+    const gpas: Record<number, { weighted: number; totalWeight: number }> = {};
+    grades.forEach((g) => {
+      if (!gpas[g.subjectId]) gpas[g.subjectId] = { weighted: 0, totalWeight: 0 };
+      const pct = g.total > 0 ? (g.score / g.total) * 100 : 0;
+      gpas[g.subjectId].weighted += pct * g.weight;
+      gpas[g.subjectId].totalWeight += g.weight;
+    });
+    const result: Record<number, number> = {};
+    Object.entries(gpas).forEach(([id, val]) => {
+      result[Number(id)] = val.totalWeight > 0 ? Math.round(val.weighted / val.totalWeight) : 0;
+    });
+    return result;
+  }, [grades]);
+
+  const overallGPA = useMemo(() => {
+    const vals = Object.values(subjectGPAs);
+    if (vals.length === 0) return 0;
+    return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+  }, [subjectGPAs]);
+
+  // Filtered flashcards for study
+  const studyCards = useMemo(() => {
+    if (cardSubjectFilter) return flashcards.filter((c) => c.subjectId === cardSubjectFilter);
+    return flashcards;
+  }, [flashcards, cardSubjectFilter]);
+
+  // ─── Actions: Tasks ───
+  const addTask = (e: FormEvent) => {
+    e.preventDefault();
+    if (!taskDraft.trim()) return;
+    const assignedCourse = taskCourse.trim() || (selectedSubject !== "All subjects" ? selectedSubject : "General Study");
+    const matchedSubject = subjects.find((s) => s.name.toLowerCase() === assignedCourse.toLowerCase());
+    const color = matchedSubject ? matchedSubject.color : "#c8d9e9";
+
+    const newTask: Task = {
+      id: Date.now(),
+      title: taskDraft.trim(),
+      course: assignedCourse,
+      time: taskTime || "Today",
+      done: false,
+      color,
+      priority: taskPriority,
+      createdAt: new Date().toISOString(),
+      deadline: taskDeadline || undefined,
+    };
+
+    setTasks((curr) => [newTask, ...curr]);
+    setTaskDraft("");
+    setTaskDeadline("");
+    addXP(5);
+    updateDailyStreak();
+    showToast("Task added! 📝");
+  };
+
+  const toggleTask = (id: number) => {
+    setTasks((curr) =>
+      curr.map((item) => {
+        if (item.id === id) {
+          const updatedDone = !item.done;
+          if (updatedDone) {
+            confetti({ particleCount: 30, spread: 50, origin: { y: 0.7 } });
+            addXP(15);
+            setStreak((p) => ({ ...p, tasksCompleted: p.tasksCompleted + 1 }));
+            showToast("Task completed! +15 XP 🎉");
+          }
+          return { ...item, done: updatedDone };
+        }
+        return item;
+      })
+    );
+  };
+
+  const deleteTask = (id: number) => setTasks((curr) => curr.filter((t) => t.id !== id));
+
+  // ─── Zero-Setup Relational Hub: Task to Note Linking ───
+  const openNoteForTask = (courseName: string, taskTitle: string) => {
+    const matchingNote = notes.find((n) => {
+      const courseMatch =
+        courseName &&
+        subjects.some(
+          (s) => s.id === n.subjectId && s.name.toLowerCase() === courseName.toLowerCase()
+        );
+      const titleMatch =
+        taskTitle &&
+        (n.title.toLowerCase().includes(taskTitle.toLowerCase()) ||
+          taskTitle.toLowerCase().includes(n.title.toLowerCase()));
+      return titleMatch || courseMatch;
+    });
+
+    if (matchingNote) {
+      selectNote(matchingNote);
+      setActiveNav("Notes");
+      showToast(`Opened linked note for ${courseName || "General Study"}`);
+    } else {
+      const matchingSub = subjects.find(
+        (s) => s.name.toLowerCase() === courseName.toLowerCase()
+      );
+      const subId = matchingSub ? matchingSub.id : 0;
+      createNewNote();
+      setNoteTitleDraft(`Notes: ${taskTitle}`);
+      setNoteSubjectId(subId);
+      setNoteDraft(
+        `# Notes: ${taskTitle}\n\n**Subject**: ${courseName || "General Study"}\n**Date**: ${new Date().toLocaleDateString()}\n\n- Key concepts to review:\n  - \n`
+      );
+      setActiveNav("Notes");
+      showToast(`Created new note draft for "${taskTitle}"`);
+    }
+  };
+
+  const startPomodoroForSubject = (subjectName: string, durationMinutes: number = 25) => {
+    setSelectedSubject(subjectName);
+    setTimerPreset(durationMinutes);
+    setSeconds(durationMinutes * 60);
+    setIsRunning(true);
+    showToast(`Started ${durationMinutes}m focus session for ${subjectName}`);
+  };
+
+  // ─── Actions: Schedule ───
+  const addScheduleItem = (e: FormEvent) => {
+    e.preventDefault();
+    if (!planTitle.trim()) return;
+    const assignedCourse = planCourse || (selectedSubject !== "All subjects" ? selectedSubject : "");
+    const toneOptions = ["bg-[#b9d6c0]", "bg-[#f2cf91]", "bg-[#e2d6ee]", "bg-[#c8d9e9]"];
+    const tone = toneOptions[scheduleItems.length % toneOptions.length];
+
+    const newItem: ScheduleItem = {
+      id: Date.now(),
+      time: planTime,
+      title: planTitle.trim(),
+      note: planNote.trim() || "Planned study session",
+      tone,
+      course: assignedCourse,
+      done: false,
+    };
+
+    setScheduleItems((curr) => [...curr, newItem].sort((a, b) => a.time.localeCompare(b.time)));
+    setPlanTitle("");
+    setPlanNote("");
+    showToast("Schedule block added! 📅");
+  };
+
+  const toggleScheduleDone = (id?: number, title?: string) => {
+    setScheduleItems((curr) =>
+      curr.map((item) => {
+        if ((id && item.id === id) || (!id && item.title === title)) return { ...item, done: !item.done };
+        return item;
+      })
+    );
+  };
+
+  const deleteScheduleItem = (id?: number, title?: string) => {
+    setScheduleItems((curr) =>
+      curr.filter((item) => {
+        if (id && item.id === id) return false;
+        if (!id && item.title === title) return false;
+        return true;
+      })
+    );
+  };
+
+  // ─── Actions: Subjects ───
+  const addSubject = (e: FormEvent) => {
+    e.preventDefault();
+    const name = subjectDraft.trim();
+    if (!name || subjects.some((s) => s.name.toLowerCase() === name.toLowerCase())) return;
+
+    const newSubject: Subject = {
+      id: Date.now(),
+      name,
+      color: subjectColor,
+      accent: "#244c3b",
+      description: subjectDesc.trim() || "Course workspace",
+    };
+
+    setSubjects((curr) => [...curr, newSubject]);
+    setTaskCourse(name);
+    setSelectedSubject(name);
+    setSubjectDraft("");
+    setSubjectDesc("");
+    setSubjectsOpen(false);
+    showToast(`Project "${name}" created! 📂`);
+  };
+
+  const updateSubject = (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingSubject) return;
+    setSubjects((curr) => curr.map((s) => (s.id === editingSubject.id ? editingSubject : s)));
+    setEditingSubject(null);
+    showToast("Project updated!");
+  };
+
+  const deleteSubject = (subjectId: number) => {
+    const sub = subjects.find((s) => s.id === subjectId);
+    setSubjects((curr) => curr.filter((s) => s.id !== subjectId));
+    if (sub && selectedSubject === sub.name) setSelectedSubject("All subjects");
+  };
+
+  // ─── Actions: Notes ───
+  const createNewNote = () => {
+    const defaultSubId = noteSubjectFilter || (subjects.length > 0 ? subjects[0].id : 0);
+    const newNote: NoteEntry = {
+      id: crypto.randomUUID(),
+      subjectId: defaultSubId,
+      title: "",
+      content: "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setNotes((curr) => [newNote, ...curr]);
+    setActiveNote(newNote);
+    setNoteTitleDraft("");
+    setNoteDraft("");
+    setNoteSubjectId(defaultSubId);
+    setNoteMode("edit");
+    addXP(5);
+    showToast("New note created! Type a title 📓");
+  };
+
+  const selectNote = (note: NoteEntry) => {
+    setActiveNote(note);
+    setNoteTitleDraft(note.title);
+    setNoteDraft(note.content);
+    setNoteSubjectId(note.subjectId);
+    setNoteMode("edit");
+  };
+
+  const handleTitleChange = (val: string) => {
+    setNoteTitleDraft(val);
+    if (activeNote) {
+      setNotes((curr) => curr.map((n) => (n.id === activeNote.id ? { ...n, title: val, updatedAt: new Date().toISOString() } : n)));
+      setActiveNote((curr) => (curr ? { ...curr, title: val } : null));
+    }
+  };
+
+  const handleContentChange = (val: string) => {
+    setNoteDraft(val);
+    if (activeNote) {
+      setNotes((curr) => curr.map((n) => (n.id === activeNote.id ? { ...n, content: val, updatedAt: new Date().toISOString() } : n)));
+      setActiveNote((curr) => (curr ? { ...curr, content: val } : null));
+    }
+  };
+
+  const handleSubjectChange = (newSubId: number) => {
+    setNoteSubjectId(newSubId);
+    if (activeNote) {
+      setNotes((curr) => curr.map((n) => (n.id === activeNote.id ? { ...n, subjectId: newSubId, updatedAt: new Date().toISOString() } : n)));
+      setActiveNote((curr) => (curr ? { ...curr, subjectId: newSubId } : null));
+    }
+  };
+
+  const saveNote = () => {
+    const titleToSave = noteTitleDraft.trim() || "Untitled Note";
+    const subIdToSave = noteSubjectId || (subjects.length > 0 ? subjects[0].id : 0);
+
+    if (activeNote) {
+      const updatedNote: NoteEntry = {
+        ...activeNote,
+        title: titleToSave,
+        content: noteDraft,
+        subjectId: subIdToSave,
+        updatedAt: new Date().toISOString(),
+      };
+      setNotes((curr) => curr.map((n) => (n.id === activeNote.id ? updatedNote : n)));
+      setActiveNote(updatedNote);
+      showToast("Note saved! 📓");
+    } else {
+      const newNote: NoteEntry = {
+        id: crypto.randomUUID(),
+        subjectId: subIdToSave,
+        title: titleToSave,
+        content: noteDraft,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setNotes((curr) => [newNote, ...curr]);
+      setActiveNote(newNote);
+      addXP(5);
+      showToast("Note created! 📓");
+    }
+  };
+
+  /**
+   * Executive Action: Directly saves a structured note into user's workspace notes & state.
+   * Auto-resolves subject (matches existing or creates new), updates store,
+   * activates note in NotesTab, and saves to offline storage/cloud.
+   */
+  const executeSaveNoteFromAI = useCallback((noteData: {
+    title: string;
+    content: string;
+    subjectName?: string;
+    subjectId?: number;
+  }) => {
+    let targetSubId = noteData.subjectId || (chatSubjectId ?? 0);
+    let targetSubName = noteData.subjectName || "";
+
+    if (!targetSubId && targetSubName) {
+      const clean = targetSubName.trim().toLowerCase();
+      const match = subjects.find(
+        (s) =>
+          s.name.toLowerCase() === clean ||
+          s.name.toLowerCase().includes(clean) ||
+          clean.includes(s.name.toLowerCase())
+      );
+      if (match) {
+        targetSubId = match.id;
+        targetSubName = match.name;
+      } else {
+        targetSubId = Date.now();
+        const colors = ["#4f46e5", "#0ea5e9", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6"];
+        const color = colors[subjects.length % colors.length];
+        const newSub: Subject = {
+          id: targetSubId,
+          name: targetSubName.charAt(0).toUpperCase() + targetSubName.slice(1),
+          color,
+          accent: color,
+        };
+        setSubjects((curr) => [...curr, newSub]);
+      }
+    }
+
+    if (!targetSubId) {
+      targetSubId = subjects[0]?.id || 1;
+      targetSubName = subjects.find((s) => s.id === targetSubId)?.name || "General Study";
+    } else if (!targetSubName) {
+      targetSubName = subjects.find((s) => s.id === targetSubId)?.name || "General Study";
+    }
+
+    const cleanTitle = noteData.title.trim() || `${targetSubName} Study Notes`;
+    const cleanContent = noteData.content.trim();
+
+    const newNote: NoteEntry = {
+      id: crypto.randomUUID(),
+      subjectId: targetSubId,
+      title: cleanTitle,
+      content: cleanContent,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    setNotes((curr) => [newNote, ...curr.filter((n) => n.id !== newNote.id)]);
+    setActiveNote(newNote);
+    setNoteTitleDraft(newNote.title);
+    setNoteDraft(newNote.content);
+    setNoteSubjectId(newNote.subjectId);
+    setNoteSubjectFilter(null);
+    setNoteMode("edit");
+
+    addXP(15);
+    showToast(`Saved note to ${targetSubName}! 📓`);
+
+    // Force immediate offline storage save
+    if (userId) {
+      const updatedNotes = [newNote, ...notes.filter((n) => n.id !== newNote.id)];
+      saveWorkspaceOffline(userId, {
+        tasks, scheduleItems, subjects, studyMinutes, focusLog,
+        notes: updatedNotes, grades, flashcards, streak, finance
+      }).catch(() => {});
+    }
+
+    return newNote;
+  }, [chatSubjectId, subjects, notes, tasks, scheduleItems, studyMinutes, focusLog, grades, flashcards, streak, finance, userId]);
+
+  /**
+   * Executive Action: Directly creates & saves flashcards into user workspace.
+   */
+  const executeSaveFlashcardsFromAI = useCallback((data: {
+    subjectName?: string;
+    subjectId?: number;
+    cards: Array<{ front: string; back: string }>;
+  }) => {
+    let targetSubId = data.subjectId || (chatSubjectId ?? 0);
+    let targetSubName = data.subjectName || "";
+
+    if (!targetSubId && targetSubName) {
+      const clean = targetSubName.trim().toLowerCase();
+      const match = subjects.find(
+        (s) =>
+          s.name.toLowerCase() === clean ||
+          s.name.toLowerCase().includes(clean) ||
+          clean.includes(s.name.toLowerCase())
+      );
+      if (match) {
+        targetSubId = match.id;
+        targetSubName = match.name;
+      } else {
+        targetSubId = Date.now();
+        const colors = ["#4f46e5", "#0ea5e9", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6"];
+        const color = colors[subjects.length % colors.length];
+        const newSub: Subject = {
+          id: targetSubId,
+          name: targetSubName.charAt(0).toUpperCase() + targetSubName.slice(1),
+          color,
+          accent: color,
+        };
+        setSubjects((curr) => [...curr, newSub]);
+      }
+    }
+
+    if (!targetSubId) {
+      targetSubId = subjects[0]?.id || 1;
+      targetSubName = subjects.find((s) => s.id === targetSubId)?.name || "General Study";
+    } else if (!targetSubName) {
+      targetSubName = subjects.find((s) => s.id === targetSubId)?.name || "General Study";
+    }
+
+    const createdCards: Flashcard[] = data.cards.map((c) => ({
+      id: crypto.randomUUID(),
+      subjectId: targetSubId,
+      front: c.front.trim(),
+      back: c.back.trim(),
+      difficulty: "medium",
+      reviewCount: 0,
+      createdAt: new Date().toISOString(),
+    }));
+
+    setFlashcards((curr) => [...createdCards, ...curr]);
+    addXP(Math.max(10, createdCards.length * 5));
+    showToast(`Saved ${createdCards.length} flashcard(s) for ${targetSubName}! 🎴`);
+
+    if (userId) {
+      const updatedFlashcards = [...createdCards, ...flashcards];
+      saveWorkspaceOffline(userId, {
+        tasks, scheduleItems, subjects, studyMinutes, focusLog,
+        notes, grades, flashcards: updatedFlashcards, streak, finance
+      }).catch(() => {});
+    }
+
+    return createdCards;
+  }, [chatSubjectId, subjects, flashcards, notes, tasks, scheduleItems, studyMinutes, focusLog, grades, streak, finance, userId]);
+
+  const handleShareNoteSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!noteToShare || !shareRecipientIdentifier.trim()) return;
+    setIsSharing(true);
+    const success = await shareNote(
+      userId,
+      userNameDisplay,
+      shareRecipientIdentifier,
+      noteToShare.title || "Untitled Note",
+      noteToShare.content
+    );
+    setIsSharing(false);
+    if (success) {
+      showToast(`Note sent to ${shareRecipientIdentifier}!`);
+      setShareNoteModalOpen(false);
+      setShareRecipientIdentifier("");
+      setNoteToShare(null);
+    } else {
+      showToast("Failed to send note. Please try again.", "error");
+    }
+  };
+
+  const handleAcceptShare = async (share: SharedNote) => {
+    const defaultSubId = subjects.length > 0 ? subjects[0].id : 0;
+    const newNote: NoteEntry = {
+      id: crypto.randomUUID(),
+      subjectId: defaultSubId,
+      title: share.note_title,
+      content: share.note_content,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    
+    setNotes(curr => [newNote, ...curr]);
+    showToast(`Note "${share.note_title}" saved to your workspace!`);
+    
+    await respondToShare(share.id, 'accepted');
+    setPendingShares(curr => curr.filter(s => s.id !== share.id));
+  };
+
+  const handleDeclineShare = async (share: SharedNote) => {
+    await respondToShare(share.id, 'rejected');
+    setPendingShares(curr => curr.filter(s => s.id !== share.id));
+    showToast("Note declined.");
+  };
+
+  const handleSendFriendRequest = async (e: FormEvent) => {
+    e.preventDefault();
+    const target = addFriendDraft.trim();
+    if (!target) return;
+    if (target.toLowerCase() === userNameDisplay.toLowerCase()) {
+      showToast("You cannot add yourself as a friend.", "error");
+      return;
+    }
+    setIsAddingFriend(true);
+    const success = await sendFriendRequest(userId, userNameDisplay, target);
+    setIsAddingFriend(false);
+    if (success) {
+      showToast(`Friend request sent to ${target}!`);
+      setAddFriendDraft("");
+    } else {
+      showToast("Failed to send friend request. Check username or database permissions.", "error");
+    }
+  };
+
+  const handleAcceptFriendRequest = async (req: Friendship) => {
+    const success = await respondToFriendRequest(req.id, 'accepted', userId, userNameDisplay);
+    if (success) {
+      showToast(`You are now friends with ${req.requester_identifier}!`);
+      loadFriends();
+      setTimeout(() => {
+        setPendingFriendRequests(curr => curr.filter(r => r.id !== req.id));
+      }, 1500);
+      return true;
+    }
+    return false;
+  };
+
+  const handleDeclineFriendRequest = async (req: Friendship) => {
+    await respondToFriendRequest(req.id, 'rejected', userId, userNameDisplay);
+    showToast("Friend request declined.");
+    setTimeout(() => {
+      setPendingFriendRequests(curr => curr.filter(r => r.id !== req.id));
+    }, 1200);
+  };
+
+  const handleDeleteFriend = async (friendshipId: string, friendName: string) => {
+    const success = await deleteFriendship(friendshipId);
+    if (success) {
+      setFriends(curr => curr.filter(f => f.id !== friendshipId));
+      showToast(`Removed ${friendName} from friends.`);
+    } else {
+      showToast("Failed to remove friend.", "error");
+    }
+  };
+
+  const deleteNote = (id: string) => {
+    setNotes((curr) => curr.filter((n) => n.id !== id));
+    if (activeNote?.id === id) {
+      setActiveNote(null);
+      setNoteTitleDraft("");
+      setNoteDraft("");
+      setNoteSubjectId(0);
+    }
+    showToast("Note deleted");
+  };
+
+  const insertFormatting = (prefix: string, suffix: string = "") => {
+    if (!noteTextAreaRef.current) {
+      setNoteDraft((curr) => curr + `${prefix}text${suffix}`);
+      return;
+    }
+    const textarea = noteTextAreaRef.current;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selectedText = noteDraft.substring(start, end);
+    const replacement = `${prefix}${selectedText || "text"}${suffix}`;
+    const newContent = noteDraft.substring(0, start) + replacement + noteDraft.substring(end);
+    setNoteDraft(newContent);
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + prefix.length, start + prefix.length + (selectedText.length || 4));
+    }, 50);
+  };
+
+  const summarizeNoteWithAI = async () => {
+    if (!noteDraft.trim()) {
+      showToast("Note is empty! Add content first.", "info");
+      return;
+    }
+    setIsSummarizingNote(true);
+    showToast("Dream It AI is summarizing your note...", "info");
+    try {
+      const res = await fetchAI({
+        model: "nvidia/nemotron-3.5-super-vl-120b-a12b",
+        messages: [{
+          role: "user",
+          content: `Please summarize the following study note into bullet points with key takeaways:\n\nNote Title: ${noteTitleDraft}\n\nContent:\n${noteDraft}`,
+        }],
+        temperature: 0.3,
+        max_tokens: 1000,
+      });
+
+      if (!res.error && res.content) {
+        const summarySection = `\n\n---\n### 💡 AI Key Summary\n${res.content.trim()}\n`;
+        setNoteDraft((curr) => curr + summarySection);
+        showToast("AI Summary added to note! ✨");
+        setIsSummarizingNote(false);
+        addXP(5);
+        return;
+      }
+    } catch (e) {
+      console.warn("AI summarize error:", e);
+    }
+    setIsSummarizingNote(false);
+    showToast("Could not generate summary right now.", "error");
+  };
+
+  // ─── Actions: Grades ───
+  const addGrade = (e: FormEvent) => {
+    e.preventDefault();
+    if (!gradeForm.name || !gradeForm.score || !gradeForm.total || !gradeForm.subjectId) return;
+    const newGrade: GradeEntry = {
+      id: crypto.randomUUID(),
+      subjectId: gradeForm.subjectId,
+      assignmentName: gradeForm.name,
+      score: parseFloat(gradeForm.score),
+      total: parseFloat(gradeForm.total),
+      weight: parseFloat(gradeForm.weight) || 100,
+      createdAt: new Date().toISOString(),
+    };
+    setGrades((curr) => [...curr, newGrade]);
+    setGradeForm({ subjectId: gradeForm.subjectId, name: "", score: "", total: "", weight: "" });
+    addXP(5);
+    showToast("Grade recorded! 📊");
+  };
+
+  // ─── Actions: Flashcards ───
+  const addFlashcard = (e: FormEvent) => {
+    e.preventDefault();
+    if (!cardForm.front.trim() || !cardForm.back.trim() || !cardForm.subjectId) return;
+    const newCard: Flashcard = {
+      id: crypto.randomUUID(),
+      subjectId: cardForm.subjectId,
+      front: cardForm.front.trim(),
+      back: cardForm.back.trim(),
+      difficulty: "medium",
+      reviewCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+    setFlashcards((curr) => [...curr, newCard]);
+    setCardForm({ ...cardForm, front: "", back: "" });
+    addXP(3);
+    showToast("Flashcard created! 🃏");
+  };
+
+  const markCardReviewed = (difficulty: "easy" | "medium" | "hard") => {
+    if (studyCards.length === 0) return;
+    const card = studyCards[currentCardIndex];
+    setFlashcards((curr) => curr.map((c) =>
+      c.id === card.id
+        ? { ...c, difficulty, reviewCount: c.reviewCount + 1, lastReviewed: new Date().toISOString() }
+        : c
+    ));
+    addXP(difficulty === "hard" ? 5 : difficulty === "medium" ? 3 : 1);
+    setStreak((p) => ({ ...p, flashcardsStudied: p.flashcardsStudied + 1 }));
+    setCardFlipped(false);
+    if (currentCardIndex < studyCards.length - 1) {
+      setCurrentCardIndex((i) => i + 1);
+    } else {
+      setStudyingCards(false);
+      setCurrentCardIndex(0);
+      showToast(`🎉 All ${studyCards.length} cards reviewed!`);
+    }
+  };
+
+  // ─── AI PDF Flashcard Generator Handlers ───
+  const handleOpenAIFlashcards = (options?: {
+    file?: AttachedFile | null;
+    note?: NoteEntry | null;
+    subjectId?: number | null;
+  }) => {
+    setPdfModalFile(options?.file || null);
+    setPdfModalNote(options?.note || null);
+    setPdfModalSubjectId(options?.subjectId ?? (options?.note?.subjectId || null));
+    setPdfFlashcardModalOpen(true);
+  };
+
+  const handleAddAIFlashcards = (
+    newCards: Array<{
+      subjectId: number;
+      front: string;
+      back: string;
+      difficulty: "easy" | "medium" | "hard";
+    }>
+  ) => {
+    const formattedCards: Flashcard[] = newCards.map((c) => ({
+      id: crypto.randomUUID(),
+      subjectId: c.subjectId,
+      front: c.front,
+      back: c.back,
+      difficulty: c.difficulty,
+      reviewCount: 0,
+      createdAt: new Date().toISOString(),
+    }));
+    setFlashcards((curr) => [...curr, ...formattedCards]);
+  };
+
+  const handleSaveSummaryNote = (title: string, content: string, subjectId: number) => {
+    const newNote: NoteEntry = {
+      id: crypto.randomUUID(),
+      subjectId,
+      title,
+      content,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setNotes((curr) => [newNote, ...curr]);
+    setActiveNote(newNote);
+    setNoteDraft(content);
+    setNoteTitleDraft(title);
+    setNoteSubjectId(subjectId);
+    showToast("Summary saved to your Notes Journal! 📖", "success");
+  };
+
+  // ─── Actions: Export ───
+  const exportDataJSON = () => {
+    const payload: UserWorkspace = { tasks, scheduleItems, subjects, studyMinutes, focusLog, notes, grades, flashcards, streak };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `dreamit-backup-${toDateKey(new Date())}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("Data exported as JSON! 📦");
+  };
+
+  const exportTasksCSV = () => {
+    const headers = "Title,Course,Priority,Status,Time,Deadline,Created\n";
+    const rows = tasks.map((t) =>
+      `"${t.title}","${t.course}","${t.priority || "medium"}","${t.done ? "Done" : "Active"}","${t.time}","${t.deadline || ""}","${t.createdAt || ""}"`
+    ).join("\n")
+    const blob = new Blob([headers + rows], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `dreamit-tasks-${toDateKey(new Date())}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("Tasks exported as CSV! 📋");
+  };
+
+  // ─── File handling ───
+  const handleUploadSuccess = (newFile: AttachedFile) => {
+    setAttachedFiles((curr) => [...curr.filter((f) => f.id !== newFile.id), newFile]);
+    if (newFile.kind === "syllabus") {
+      setAutopilotMode("syllabus");
+      setSyllabusExamName(newFile.fileName.replace(/\.[^/.]+$/, ""));
+      if (newFile.content) setSyllabusText(newFile.content);
+      setActiveNav("Today");
+      showToast(`Syllabus loaded into Autopilot Taskmaster! 📅`);
+      setTimeout(() => {
+        const el = document.getElementById("autopilot-section");
+        if (el) el.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+    } else {
+      showToast(`Uploaded "${newFile.fileName}" ✅`);
+    }
+  };
+
+  // Approve and deploy a pending Autopilot syllabus roadmap to workspace
+  const handleApproveSyllabusRun = (runId: string) => {
+    const run = autopilotRuns.find((r) => r.id === runId);
+    if (!run) return;
+
+    const newSchedule: ScheduleItem[] = (run.pendingScheduleItems || []).map((item, idx) => ({
+      id: Date.now() + idx,
+      title: item.title,
+      time: item.time || "10:00",
+      note: item.note || "Exam Countdown Session",
+      course: item.course || (subjects[0]?.name || "General"),
+      tone: ["bg-[#b9d6c0]", "bg-[#f2cf91]", "bg-[#e2d6ee]", "bg-[#c8d9e9]"][idx % 4],
+      done: false,
+      createdBy: "agent",
+      agentRunId: runId,
+    }));
+
+    const newTasksList: Task[] = (run.pendingTasks || []).map((t, idx) => ({
+      id: Date.now() + 1000 + idx,
+      title: t.title,
+      course: t.course || (subjects[0]?.name || "General"),
+      time: "Exam Target",
+      done: false,
+      color: "bg-indigo-500",
+      priority: (t.priority?.toLowerCase() as any) || "high",
+      deadline: t.deadline || run.examDate,
+      createdAt: new Date().toISOString(),
+      createdBy: "agent",
+      agentRunId: runId,
+    }));
+
+    if (newSchedule.length > 0) {
+      setScheduleItems((curr) => [...curr, ...newSchedule].sort((a, b) => a.time.localeCompare(b.time)));
+    }
+    if (newTasksList.length > 0) {
+      setTasks((curr) => [...newTasksList, ...curr]);
+    }
+
+    addXP(30);
+    confetti({ particleCount: 80, spread: 80, origin: { y: 0.5 } });
+
+    setAutopilotRuns((prev) =>
+      prev.map((r) =>
+        r.id === runId
+          ? {
+              ...r,
+              status: "done" as const,
+              createdSchedule: newSchedule.map((s) => s.title),
+              createdTasks: newTasksList.map((t) => t.title),
+            }
+          : r
+      )
+    );
+
+    showToast(`Autopilot deployed ${newSchedule.length} schedule blocks & ${newTasksList.length} tasks! 🚀 (+30 XP)`);
+  };
+
+  const handleAutopilotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    // ─── A. Syllabus & Exam Countdown Mode ───
+    if (autopilotMode === "syllabus") {
+      const examName = syllabusExamName.trim() || "Upcoming Exams";
+      const targetDate = syllabusExamDate || new Date(Date.now() + 21 * 86400000).toISOString().split("T")[0];
+      const daysRemaining = Math.max(1, Math.ceil((new Date(targetDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+      const rawSyllabus = (syllabusText || autopilotText).trim();
+
+      if (!rawSyllabus) {
+        showToast("Please provide syllabus topics or upload a syllabus document.", "error");
+        return;
+      }
+
+      setIsSubmittingAutopilot(true);
+      const runId = `run-syllabus-${Date.now()}`;
+      const runEntry = {
+        id: runId,
+        timestamp: new Date().toISOString(),
+        status: "planning" as const,
+        isSyllabusRun: true,
+        examName,
+        examDate: targetDate,
+        daysRemaining,
+        roadmapMilestones: [] as any[],
+        pendingScheduleItems: [] as ScheduleItem[],
+        pendingTasks: [] as Task[],
+        extractedItems: [] as any[],
+        createdTasks: [] as string[],
+        createdSchedule: [] as string[],
+      };
+
+      setAutopilotRuns((prev) => [runEntry, ...prev]);
+
+      try {
+        const prompt = `You are the Autopilot Academic Engine for Dream It.
+Construct a high-yield, cognitive spaced-repetition Exam Countdown Study Roadmap.
+Target Exam: "${examName}"
+Exam Date: ${targetDate} (${daysRemaining} days away from today)
+Daily Study Hours: ${syllabusDailyHours} hours/day
+Student's Registered Subjects: ${subjects.map((s) => s.name).join(", ") || "General Studies"}
+
+SYLLABUS & TOPIC MATERIAL:
+${rawSyllabus.slice(0, 15000)}
+
+Distribute study blocks across 4 cognitive phases:
+1. Phase 1 (First 50% of time): Core Concept Acquisition & Difficult Theory
+2. Phase 2 (Next 30% of time): Intensive Practice Problems & Flashcards
+3. Phase 3 (Final 15% of time): Timed Mock Tests & High-Yield Revisions
+4. Phase 4 (Final day before exam): T-1 Calm Rest & Formula Sheet Review
+
+Return ONLY a valid JSON object matching this schema without markdown fences:
+{
+  "milestones": [
+    {
+      "dayOffset": 1,
+      "countdownTag": "T-${Math.min(daysRemaining, 21)} Days",
+      "focusSubject": "Subject Name",
+      "title": "Module or Chapter Title",
+      "hours": ${syllabusDailyHours},
+      "priority": "High",
+      "goals": ["Goal 1", "Goal 2"]
+    }
+  ],
+  "scheduleItems": [
+    {
+      "title": "Study Block Title",
+      "time": "09:00 - 10:30",
+      "note": "Learning objectives",
+      "course": "Subject Name",
+      "priority": "High"
+    }
+  ],
+  "tasks": [
+    {
+      "title": "Milestone Task Title",
+      "course": "Subject Name",
+      "deadline": "${targetDate}",
+      "priority": "high"
+    }
+  ]
+}`;
+
+        const res = await fetchAI({
+          model: "nvidia/nemotron-3.5-super-vl-120b-a12b",
+          messages: [
+            { role: "system", content: "You are Dream It Autopilot. Output only clean, valid JSON matching the requested schema." },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0.2,
+          max_tokens: 3000,
+        });
+
+        let parsed: any = null;
+        try {
+          const cleaned = res.content.replace(/```json\s*|\s*```/g, "").trim();
+          parsed = JSON.parse(cleaned);
+        } catch (e) {
+          console.warn("JSON parse fallback on syllabus run:", e);
+        }
+
+        const milestones = Array.isArray(parsed?.milestones) ? parsed.milestones : [
+          {
+            dayOffset: 1,
+            countdownTag: `T-${daysRemaining} Days`,
+            focusSubject: subjects[0]?.name || "Core Topics",
+            title: `Foundation Review for ${examName}`,
+            hours: syllabusDailyHours,
+            priority: "High",
+            goals: ["Read foundational chapters", "Take structured notes"],
+          }
+        ];
+
+        const scheduleBlocks: ScheduleItem[] = Array.isArray(parsed?.scheduleItems) ? parsed.scheduleItems : [
+          {
+            title: `${examName} Intensive Study Block`,
+            time: "09:30 - 11:30",
+            note: "Autopilot Exam Countdown focus block",
+            course: subjects[0]?.name || "General",
+            priority: "High",
+          }
+        ];
+
+        const milestoneTasks: Task[] = Array.isArray(parsed?.tasks) ? parsed.tasks : [
+          {
+            id: Date.now(),
+            title: `Complete ${examName} syllabus milestone`,
+            course: subjects[0]?.name || "General",
+            time: "Today",
+            done: false,
+            color: "bg-blue-500",
+            priority: "high",
+            deadline: targetDate,
+            createdAt: new Date().toISOString(),
+          }
+        ];
+
+        setAutopilotRuns((prev) =>
+          prev.map((r) =>
+            r.id === runId
+              ? {
+                  ...r,
+                  status: "pending_approval" as const,
+                  roadmapMilestones: milestones,
+                  pendingScheduleItems: scheduleBlocks,
+                  pendingTasks: milestoneTasks,
+                  extractedItems: milestones.map((m: any) => ({
+                    title: m.title,
+                    type: "schedule",
+                    course: m.focusSubject,
+                    priority: m.priority,
+                    time: `${m.hours}h`,
+                  })),
+                }
+              : r
+          )
+        );
+
+        showToast(`Autopilot planned ${milestones.length} milestones for ${examName}! Review & approve to deploy. 📅`);
+      } catch (err: any) {
+        setAutopilotRuns((prev) =>
+          prev.map((r) => (r.id === runId ? { ...r, status: "error" as const, errorMsg: err?.message || "Failed to generate roadmap" } : r))
+        );
+        showToast("Autopilot failed to generate schedule. Please try again.", "error");
+      } finally {
+        setIsSubmittingAutopilot(false);
+      }
+      return;
+    }
+
+    // ─── B. Quick Actions Mode ───
+    const rawInput = autopilotText.trim();
+    if (!rawInput) return;
+
+    setIsSubmittingAutopilot(true);
+    const runId = `run-${Date.now()}`;
+    const runEntry = {
+      id: runId,
+      timestamp: new Date().toISOString(),
+      status: "extracting" as const,
+      extractedItems: [] as {
+        title: string;
+        type: string;
+        priority?: string;
+        deadline?: string;
+        time?: string;
+        course?: string;
+        amount?: number;
+        front?: string;
+        back?: string;
+        score?: number;
+        total?: number;
+        weight?: number;
+        content?: string;
+        description?: string;
+        color?: string;
+        difficulty?: string;
+        assignmentName?: string;
+      }[],
+      createdTasks: [] as string[],
+      createdSchedule: [] as string[],
+      createdSubjects: [] as string[],
+      createdFlashcards: [] as string[],
+      createdGrades: [] as string[],
+      createdNotes: [] as string[],
+      createdFinance: [] as string[],
+    };
+    setAutopilotRuns((prev) => [runEntry, ...prev]);
+
+    try {
+      let items: any[] = [];
+      const lower = rawInput.toLowerCase();
+
+      // ─── 1. Ultra-Fast 0ms Local Heuristic Matching (Zero Latency) ───
+      // A. Finance Income
+      const incomeMatch = rawInput.match(/(?:add\s+(?:his\s+|my\s+)?income(?:\s+as|\s+of)?|income[:\s]+)(?:rs\.?|inr|₹)?\s*([\d,]+)/i);
+      // B. Finance Expense
+      const expenseMatch = rawInput.match(/(?:add\s+(?:expense|spend|spent)(?:\s+as|\s+of)?|expense[:\s]+)(?:rs\.?|inr|₹)?\s*([\d,]+)/i);
+      // C. Subject Creation (e.g. "create a new subject called Machine Learning", "add subject Robotics: Advanced systems")
+      const subjectMatch = rawInput.match(/^(?:create|add|new)\s+(?:a\s+)?(?:new\s+)?(?:subject|course|project)(?:\s+named|\s+called)?\s+[:"']?([^:"'\n,]+?)["']?(?:\s+(?:with\s+color|color)\s+([#a-z0-9]+))?(?:\s*[:\-]\s*(.+))?$/i);
+      // D. Flashcards (e.g. "create flashcards for Biology: Mitochondria -> Powerhouse, Ribosome -> Protein synthesis")
+      const flashcardsMatch = rawInput.match(/^(?:create|make|add)\s+flashcards?\s+(?:for\s+)?([a-z0-9\s]+?)?[:\-]\s*(.+)$/is);
+      const singleCardMatch = rawInput.match(/^(?:flashcard|card)[:\s]+(.+?)(?:\s*(?:->|=>|::|\sis\s|\smeans\s|\s*-\s*)\s*)(.+)$/i);
+      // E. Grade entry / update (e.g. "add grade for Math: Midterm 95/100 weight 20%", "record grade 92/100 in Physics Quiz")
+      const gradeMatch1 = rawInput.match(/^(?:add|update|record|enter)\s+grade\s+(?:for\s+)?([a-z0-9\s]+?)?[:\-]?\s*([a-z0-9\s]+?)\s*(\d+(?:\.\d+)?)\s*(?:\/|\s*out of\s*)\s*(\d+(?:\.\d+)?)(?:\s*(?:weight|weightage)\s*(\d+(?:\.\d+)?%?))?/i);
+      const gradeMatch2 = rawInput.match(/^(?:add|update|record)\s+(?:grade|score)\s+(\d+(?:\.\d+)?)(?:\/(\d+(?:\.\d+)?))?\s+(?:in|for)\s+([a-z0-9\s]+?)(?:\s+for\s+([a-z0-9\s]+))?$/i);
+      const gradeMatch3 = rawInput.match(/^(?:grade|score)\s+(?:for\s+)?([a-z0-9\s]+?)[:\-]\s*([a-z0-9\s]+?)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:\/|\s*out of\s*)?\s*(\d+(?:\.\d+)?)?/i);
+      // F. Note creation (e.g. "create note for History: The Industrial Revolution...", "take note for CS: React hooks...")
+      const noteMatch = rawInput.match(/^(?:create|add|take|write)\s+(?:a\s+)?note\s+(?:for|on|about)?\s*([a-z0-9\s]+?)?[:\-]\s*(.+)$/is);
+      // G. Task creation (e.g. "add task: Finish math homework by tomorrow")
+      const taskMatch = rawInput.match(/^(?:create|add|new)\s+task\s+[:\-]?\s*(.+)$/i);
+
+      if (incomeMatch) {
+        const amt = parseFloat(incomeMatch[1].replace(/,/g, ""));
+        if (!isNaN(amt) && amt > 0) {
+          items = [{
+            title: `Income: ₹${amt.toLocaleString("en-IN")}`,
+            type: "finance_income",
+            amount: amt,
+            priority: "High",
+          }];
+        }
+      } else if (expenseMatch) {
+        const amt = parseFloat(expenseMatch[1].replace(/,/g, ""));
+        if (!isNaN(amt) && amt > 0) {
+          items = [{
+            title: `Expense: ₹${amt.toLocaleString("en-IN")}`,
+            type: "finance_expense",
+            amount: amt,
+            priority: "Medium",
+          }];
+        }
+      } else if (subjectMatch && subjectMatch[1]?.trim()) {
+        const subName = subjectMatch[1].trim();
+        items = [{
+          title: subName,
+          type: "subject",
+          color: subjectMatch[2]?.trim(),
+          description: subjectMatch[3]?.trim() || `Course workspace for ${subName}`,
+          priority: "High",
+        }];
+      } else if (flashcardsMatch && flashcardsMatch[2]?.trim()) {
+        const courseName = flashcardsMatch[1]?.trim() || "General Study";
+        const body = flashcardsMatch[2].trim();
+        // Split by lines, semicolons, or commas with arrow
+        const rawSplits = body.split(/\n+|;/).map((s) => s.trim()).filter(Boolean);
+        const cardItems: any[] = [];
+        for (const segment of rawSplits) {
+          const arrowM = segment.match(/^(.+?)\s*(?:->|=>|::|\sis\s|\smeans\s|\s*-\s*)\s*(.+)$/i);
+          if (arrowM) {
+            cardItems.push({
+              title: arrowM[1].trim(),
+              front: arrowM[1].trim(),
+              back: arrowM[2].trim(),
+              type: "flashcard",
+              course: courseName,
+              difficulty: "medium",
+              priority: "Medium",
+            });
+          } else if (segment.includes(",")) {
+            const subCards = segment.split(",").map((s) => s.trim()).filter(Boolean);
+            for (const sub of subCards) {
+              const subM = sub.match(/^(.+?)\s*(?:->|=>|::|\sis\s|\smeans\s|\s*-\s*)\s*(.+)$/i);
+              if (subM) {
+                cardItems.push({
+                  title: subM[1].trim(),
+                  front: subM[1].trim(),
+                  back: subM[2].trim(),
+                  type: "flashcard",
+                  course: courseName,
+                  difficulty: "medium",
+                  priority: "Medium",
+                });
+              }
+            }
+          }
+        }
+        if (cardItems.length > 0) {
+          items = cardItems;
+        }
+      } else if (singleCardMatch && singleCardMatch[1]?.trim() && singleCardMatch[2]?.trim()) {
+        items = [{
+          title: singleCardMatch[1].trim(),
+          front: singleCardMatch[1].trim(),
+          back: singleCardMatch[2].trim(),
+          type: "flashcard",
+          course: "General Study",
+          difficulty: "medium",
+          priority: "Medium",
+        }];
+      } else if (gradeMatch1) {
+        const course = gradeMatch1[1]?.trim() || "General Study";
+        const asgName = gradeMatch1[2]?.trim() || "Assessment";
+        const score = parseFloat(gradeMatch1[3]);
+        const total = parseFloat(gradeMatch1[4]) || 100;
+        const weight = gradeMatch1[5] ? parseFloat(gradeMatch1[5].replace("%", "")) : 100;
+        items = [{
+          title: `${course}: ${asgName}`,
+          type: "grade",
+          assignmentName: asgName,
+          score,
+          total,
+          weight,
+          course,
+          priority: "High",
+        }];
+      } else if (gradeMatch2) {
+        const score = parseFloat(gradeMatch2[1]);
+        const total = gradeMatch2[2] ? parseFloat(gradeMatch2[2]) : 100;
+        const course = gradeMatch2[3]?.trim() || "General Study";
+        const asgName = gradeMatch2[4]?.trim() || "Assessment";
+        items = [{
+          title: `${course}: ${asgName}`,
+          type: "grade",
+          assignmentName: asgName,
+          score,
+          total,
+          weight: 100,
+          course,
+          priority: "High",
+        }];
+      } else if (gradeMatch3) {
+        const course = gradeMatch3[1]?.trim() || "General Study";
+        const asgName = gradeMatch3[2]?.trim() || "Assessment";
+        const score = parseFloat(gradeMatch3[3]);
+        const total = gradeMatch3[4] ? parseFloat(gradeMatch3[4]) : 100;
+        items = [{
+          title: `${course}: ${asgName}`,
+          type: "grade",
+          assignmentName: asgName,
+          score,
+          total,
+          weight: 100,
+          course,
+          priority: "High",
+        }];
+      } else if (noteMatch && noteMatch[2]?.trim()) {
+        const course = noteMatch[1]?.trim() || "General Study";
+        const noteContent = noteMatch[2].trim();
+        const noteTitle = noteContent.length > 40 ? `${noteContent.slice(0, 37)}...` : noteContent;
+        items = [{
+          title: noteTitle,
+          type: "note",
+          content: noteContent,
+          course,
+          priority: "Medium",
+        }];
+      } else if (
+        lower.includes("schedule based on") ||
+        lower.includes("schedule my tasks") ||
+        lower.includes("plan my tasks") ||
+        lower.includes("make a schedule based on my tasks") ||
+        lower.includes("make schedule based on") ||
+        lower.includes("schedule assigned tasks")
+      ) {
+        const pending = tasks.filter((t) => !t.done);
+        const sourceTasks = pending.length > 0 ? pending : tasks;
+        if (sourceTasks.length > 0) {
+          const timeSlots = ["09:00", "11:00", "14:00", "16:00", "18:00", "20:00"];
+          items = sourceTasks.slice(0, 6).map((t, idx) => ({
+            title: `Study: ${t.title}`,
+            type: "schedule",
+            time: timeSlots[idx % timeSlots.length],
+            deadline: "Today",
+            course: t.course,
+            priority: t.priority || "Medium",
+          }));
+        }
+      } else if (taskMatch && taskMatch[1]?.trim()) {
+        items = [{
+          title: taskMatch[1].trim(),
+          type: "task",
+          course: "General Study",
+          priority: "Medium",
+          time: "Today",
+        }];
+      } else if (/(?:semminar|seminar|meeting|class|exam|quiz|presentation)\s+(?:on\s+)?([a-z0-9\s]+)/i.test(lower)) {
+        const match = lower.match(/(?:semminar|seminar|meeting|class|exam|quiz|presentation)\s+(?:on\s+)?([a-z0-9\s]+)/i);
+        const eventType = rawInput.split(/\s+/)[0];
+        const dayStr = match ? match[1].trim() : "Upcoming";
+        const capDay = dayStr.charAt(0).toUpperCase() + dayStr.slice(1);
+        items = [{
+          title: `${eventType.charAt(0).toUpperCase() + eventType.slice(1)} (${capDay})`,
+          type: "event",
+          time: "10:00",
+          deadline: capDay,
+          priority: "High",
+          course: "General Study",
+        }];
+      }
+
+      // ─── 2. AI Parsing with NVIDIA AI Multi-Model Failover ───
+      if (items.length === 0) {
+        const assignedTasksContext = tasks.slice(0, 8).map((t) => `- "${t.title}" (${t.course}, priority: ${t.priority})`).join("\n");
+        const existingSubjects = subjects.map((s) => s.name).join(", ");
+        const extractionPrompt = `You are an intelligent OS assistant for an all-in-one student workspace and productivity system.
+Analyze the user's raw input and extract ALL actionable items into a JSON array of objects.
+
+Supported item types:
+1. "subject": New subject / course / project workspace.
+   - "type": "subject"
+   - "title": (string, subject name e.g. "Machine Learning", "Physics")
+   - "color": (optional hex color string or null)
+   - "description": (optional course summary)
+
+2. "flashcard": Study flashcard for memory and active recall.
+   - "type": "flashcard"
+   - "title": (short question or term)
+   - "front": (question or key term)
+   - "back": (answer or definition)
+   - "course": (associated subject/course name)
+   - "difficulty": "easy" | "medium" | "hard"
+
+3. "grade": Academic score or grade entry/update.
+   - "type": "grade"
+   - "assignmentName": (e.g. "Midterm Exam", "Quiz 1", "Final Project")
+   - "score": (number e.g. 95, 88.5)
+   - "total": (number e.g. 100, 50, default is 100)
+   - "weight": (optional number e.g. 20 for 20%, default 100)
+   - "course": (associated subject/course name)
+
+4. "note": Study note, summary, or lecture notes.
+   - "type": "note"
+   - "title": (descriptive title of the note)
+   - "content": (markdown text content of the note)
+   - "course": (associated subject/course name)
+
+5. "schedule": Scheduled study block or calendar item.
+   - "type": "schedule"
+   - "title": (string)
+   - "time": (time string e.g. "10:00", "14:30")
+   - "course": (associated subject/course name)
+   - "priority": "High" | "Medium" | "Low"
+
+6. "event": Event, seminar, exam, quiz, presentation.
+   - "type": "event"
+   - "title": (string)
+   - "time": (e.g. "10:00")
+   - "deadline": (e.g. "Friday", "Tomorrow")
+   - "course": (subject name)
+   - "priority": "High" | "Medium" | "Low"
+
+7. "finance_income": Money received / income.
+   - "type": "finance_income"
+   - "amount": (number)
+   - "title": (string)
+
+8. "finance_expense": Money spent / expense.
+   - "type": "finance_expense"
+   - "amount": (number)
+   - "title": (string)
+
+9. "task": To-do task or assignment.
+   - "type": "task"
+   - "title": (string)
+   - "course": (subject name)
+   - "priority": "High" | "Medium" | "Low"
+   - "deadline": (optional)
+   - "time": (optional e.g. "Today")
+
+Existing workspace subjects:
+${existingSubjects || "(No subjects created yet)"}
+
+Existing workspace tasks:
+${assignedTasksContext || "(No tasks assigned yet)"}
+
+Raw text to analyze:
+"${rawInput}"
+
+Output ONLY a raw valid JSON array. Do NOT wrap in markdown code blocks if possible.`;
+
+        const response = await fetchAI({
+          model: "nvidia/nemotron-3.5-super-vl-120b-a12b",
+          messages: [{ role: "user", content: extractionPrompt }],
+          max_tokens: 1536,
+          temperature: 0.1,
+        });
+
+        if (response.error) {
+          throw new Error(response.error);
+        }
+
+        let cleaned = (response.content || "[]").trim();
+        if (cleaned.startsWith("```")) {
+          cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+        }
+        try {
+          items = JSON.parse(cleaned);
+          if (!Array.isArray(items)) items = [];
+        } catch {
+          items = [];
+        }
+      }
+
+      // Update run with extracted items
+      setAutopilotRuns((prev) =>
+        prev.map((r) => (r.id === runId ? { ...r, status: "planning" as const, extractedItems: items } : r))
+      );
+
+      if (items.length === 0) {
+        setAutopilotRuns((prev) =>
+          prev.map((r) => (r.id === runId ? { ...r, status: "done" as const, errorMsg: "No actionable items found in the text." } : r))
+        );
+        setAutopilotText("");
+        setIsSubmittingAutopilot(false);
+        showToast("No actionable items found.", "info");
+        return;
+      }
+
+      // Stage B: Execute — create subjects, flashcards, grades, notes, tasks, schedule, finance
+      setAutopilotRuns((prev) =>
+        prev.map((r) => (r.id === runId ? { ...r, status: "executing" as const } : r))
+      );
+
+      const toneColors = ["#b9d6c0", "#f2cf91", "#e2d6ee", "#c8d9e9", "#f5b7b1", "#aed6f1", "#d7bde2", "#a3e4d7"];
+      const toneOptions = ["bg-[#b9d6c0]", "bg-[#f2cf91]", "bg-[#e2d6ee]", "bg-[#c8d9e9]"];
+
+      const createdTaskNames: string[] = [];
+      const createdScheduleNames: string[] = [];
+      const createdSubjectNames: string[] = [];
+      const createdFlashcardNames: string[] = [];
+      const createdGradeNames: string[] = [];
+      const createdNoteNames: string[] = [];
+      const createdFinanceNames: string[] = [];
+
+      const newTasks: Task[] = [];
+      const newScheduleItems: ScheduleItem[] = [];
+      const newSubjectsToAdd: Subject[] = [];
+      const newFlashcardsToAdd: Flashcard[] = [];
+      let currentGrades = [...grades];
+      const newNotesToAdd: NoteEntry[] = [];
+      let currentSubjects = [...subjects];
+      let updatedFinance = finance;
+
+      // Helper to auto-create and resolve subject IDs seamlessly
+      const resolveSubjectId = (courseName?: string, createIfMissing: boolean = true): number => {
+        const cleanName = (courseName || "").trim();
+        if (!cleanName) {
+          if (currentSubjects.length > 0) return currentSubjects[0].id;
+          if (!createIfMissing) return 0;
+        }
+        const targetName = cleanName || "General Study";
+        const found = currentSubjects.find((s) => s.name.toLowerCase() === targetName.toLowerCase());
+        if (found) return found.id;
+
+        if (!createIfMissing) return currentSubjects[0]?.id || 0;
+
+        // Auto-create subject with curated palette
+        const newSub: Subject = {
+          id: Date.now() + Math.floor(Math.random() * 1000) + currentSubjects.length,
+          name: targetName,
+          color: toneColors[currentSubjects.length % toneColors.length],
+          accent: "#244c3b",
+          description: `Auto-created workspace for ${targetName}`,
+        };
+        currentSubjects.push(newSub);
+        newSubjectsToAdd.push(newSub);
+        createdSubjectNames.push(newSub.name);
+        return newSub.id;
+      };
+
+      for (const item of items) {
+        if (item.type === "subject") {
+          const subName = (item.title || "").trim();
+          if (subName) {
+            const exists = currentSubjects.some((s) => s.name.toLowerCase() === subName.toLowerCase());
+            if (!exists) {
+              const newSub: Subject = {
+                id: Date.now() + Math.floor(Math.random() * 1000) + currentSubjects.length,
+                name: subName,
+                color: item.color || toneColors[currentSubjects.length % toneColors.length],
+                accent: "#244c3b",
+                description: item.description || `Course workspace for ${subName}`,
+              };
+              currentSubjects.push(newSub);
+              newSubjectsToAdd.push(newSub);
+              createdSubjectNames.push(newSub.name);
+            }
+          }
+        } else if (item.type === "flashcard") {
+          const targetSubId = resolveSubjectId(item.course);
+          const frontText = (item.front || item.title || "Term").trim();
+          const backText = (item.back || item.details || item.content || "Definition").trim();
+          const card: Flashcard = {
+            id: crypto.randomUUID(),
+            subjectId: targetSubId,
+            front: frontText,
+            back: backText,
+            difficulty: (item.difficulty as "easy" | "medium" | "hard") || "medium",
+            reviewCount: 0,
+            createdAt: new Date().toISOString(),
+          };
+          newFlashcardsToAdd.push(card);
+          createdFlashcardNames.push(`${frontText} → ${backText}`);
+        } else if (item.type === "grade") {
+          const targetSubId = resolveSubjectId(item.course);
+          const asgName = (item.assignmentName || item.title || "Assessment").trim();
+          const scoreVal = Number(item.score || 0);
+          const totalVal = Number(item.total || 100);
+          const weightVal = Number(item.weight || 100);
+
+          // Check if grade already exists for this subject & assignment name -> update it!
+          const existingIdx = currentGrades.findIndex(
+            (g) => g.subjectId === targetSubId && g.assignmentName.toLowerCase() === asgName.toLowerCase()
+          );
+          if (existingIdx !== -1) {
+            currentGrades[existingIdx] = {
+              ...currentGrades[existingIdx],
+              score: scoreVal,
+              total: totalVal,
+              weight: weightVal,
+            };
+            const courseObj = currentSubjects.find((s) => s.id === targetSubId);
+            createdGradeNames.push(`Updated ${courseObj?.name || "Grade"}: ${asgName} (${scoreVal}/${totalVal})`);
+          } else {
+            const newGrade: GradeEntry = {
+              id: crypto.randomUUID(),
+              subjectId: targetSubId,
+              assignmentName: asgName,
+              score: scoreVal,
+              total: totalVal,
+              weight: weightVal,
+              createdAt: new Date().toISOString(),
+            };
+            currentGrades.push(newGrade);
+            const courseObj = currentSubjects.find((s) => s.id === targetSubId);
+            createdGradeNames.push(`${courseObj?.name || "Grade"}: ${asgName} (${scoreVal}/${totalVal})`);
+          }
+        } else if (item.type === "note") {
+          const targetSubId = resolveSubjectId(item.course);
+          const noteTitle = (item.title || "Study Note").trim();
+          const noteContent = (item.content || item.details || "").trim();
+          const newNote: NoteEntry = {
+            id: crypto.randomUUID(),
+            subjectId: targetSubId,
+            title: noteTitle,
+            content: noteContent,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          newNotesToAdd.push(newNote);
+          createdNoteNames.push(noteTitle);
+        } else if (item.type === "finance_income" || item.type === "finance_expense") {
+          const amtNum = Math.round(Number(item.amount || 0));
+          const amtPaisa = amtNum * 100;
+          const isIncome = item.type === "finance_income";
+
+          const baseFinance: FinanceData = updatedFinance || {
+            profile: { mode: "student", currency: "INR", monthlyIncome: 0, setupComplete: true },
+            accounts: [
+              {
+                id: "acc_main",
+                name: "Main Account",
+                type: "savings",
+                balance: 0,
+                currency: "INR",
+                isDefault: true,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+            ],
+            transactions: [],
+            categories: [],
+            budgets: [],
+            goals: [],
+          };
+
+          const newTx: FinanceTransaction = {
+            id: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            accountId: baseFinance.accounts?.[0]?.id || "acc_main",
+            type: isIncome ? "income" : "expense",
+            amount: amtPaisa,
+            categoryId: isIncome ? "salary" : "general",
+            description: item.title || (isIncome ? "Income Recorded" : "Expense Recorded"),
+            date: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          const newAccounts = (baseFinance.accounts || []).map((acc, i) =>
+            i === 0 ? { ...acc, balance: isIncome ? acc.balance + amtPaisa : acc.balance - amtPaisa } : acc
+          );
+
+          const newProfile: FinanceProfile = {
+            ...(baseFinance.profile || { mode: "student", currency: "INR", setupComplete: true }),
+            monthlyIncome: isIncome
+              ? (baseFinance.profile?.monthlyIncome || 0) + amtPaisa
+              : (baseFinance.profile?.monthlyIncome || 0),
+          };
+
+          updatedFinance = {
+            ...baseFinance,
+            accounts: newAccounts,
+            profile: newProfile,
+            transactions: [newTx, ...(baseFinance.transactions || [])],
+          };
+
+          createdFinanceNames.push(
+            isIncome
+              ? `Income: ₹${amtNum.toLocaleString("en-IN")}`
+              : `Expense: ₹${amtNum.toLocaleString("en-IN")}`
+          );
+        } else if (item.type === "schedule" || item.type === "event") {
+          const courseName = item.course || "General Study";
+          const schedItem: ScheduleItem = {
+            id: Date.now() + Math.random() * 1000,
+            time: item.time || (item.deadline ? item.deadline : "10:00"),
+            title: item.title,
+            note: `Auto-created by Autopilot • ${item.priority || "Medium"} priority`,
+            tone: toneOptions[newScheduleItems.length % toneOptions.length],
+            course: courseName,
+            done: false,
+            createdBy: "agent",
+            agentRunId: runId,
+          };
+          newScheduleItems.push(schedItem);
+          createdScheduleNames.push(item.title);
+        } else {
+          // Default: task
+          const courseName = item.course || "General Study";
+          const matchedSubject = currentSubjects.find((s) => s.name.toLowerCase() === courseName.toLowerCase());
+          const color = matchedSubject ? matchedSubject.color : "#c8d9e9";
+          const rawPriority = (item.priority || "medium").toLowerCase();
+          const priorityVal = (rawPriority === "high" || rawPriority === "low" ? rawPriority : "medium") as "low" | "medium" | "high";
+          const task: Task = {
+            id: Date.now() + Math.random() * 1000,
+            title: item.title,
+            course: courseName,
+            time: item.time || "Today",
+            done: false,
+            color,
+            priority: priorityVal,
+            createdAt: new Date().toISOString(),
+            deadline: item.deadline || undefined,
+            createdBy: "agent",
+            agentRunId: runId,
+          };
+          newTasks.push(task);
+          createdTaskNames.push(item.title);
+        }
+      }
+
+      // Batch-update all state stores
+      if (newSubjectsToAdd.length > 0) {
+        setSubjects((curr) => [...curr, ...newSubjectsToAdd]);
+      }
+      if (newFlashcardsToAdd.length > 0) {
+        setFlashcards((curr) => [...curr, ...newFlashcardsToAdd]);
+      }
+      if (createdGradeNames.length > 0) {
+        setGrades(currentGrades);
+      }
+      if (newNotesToAdd.length > 0) {
+        setNotes((curr) => [...newNotesToAdd, ...curr]);
+      }
+      if (newTasks.length > 0) {
+        setTasks((curr) => [...newTasks, ...curr]);
+      }
+      if (newScheduleItems.length > 0) {
+        setScheduleItems((curr) => [...curr, ...newScheduleItems].sort((a, b) => (a.time || "").localeCompare(b.time || "")));
+      }
+      if (updatedFinance) {
+        setFinance(updatedFinance);
+      }
+
+      // Mark run as complete
+      setAutopilotRuns((prev) =>
+        prev.map((r) =>
+          r.id === runId
+            ? {
+                ...r,
+                status: "done" as const,
+                createdTasks: createdTaskNames,
+                createdSchedule: createdScheduleNames,
+                createdSubjects: createdSubjectNames,
+                createdFlashcards: createdFlashcardNames,
+                createdGrades: createdGradeNames,
+                createdNotes: createdNoteNames,
+                createdFinance: createdFinanceNames,
+              }
+            : r
+        )
+      );
+
+      setAutopilotText("");
+      addXP(items.length * 5);
+      confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
+
+      const summaryParts = [
+        createdSubjectNames.length > 0 ? `${createdSubjectNames.length} subject(s)` : null,
+        createdFlashcardNames.length > 0 ? `${createdFlashcardNames.length} flashcard(s)` : null,
+        createdGradeNames.length > 0 ? `${createdGradeNames.length} grade(s)` : null,
+        createdNoteNames.length > 0 ? `${createdNoteNames.length} note(s)` : null,
+        createdTaskNames.length > 0 ? `${createdTaskNames.length} task(s)` : null,
+        createdScheduleNames.length > 0 ? `${createdScheduleNames.length} schedule item(s)` : null,
+        createdFinanceNames.length > 0 ? "Finance updated" : null,
+      ].filter(Boolean);
+
+      showToast(`Autopilot completed! ${summaryParts.join(", ") || "Actions processed"} ✨`);
+    } catch (err: any) {
+      setAutopilotRuns((prev) =>
+        prev.map((r) => (r.id === runId ? { ...r, status: "error" as const, errorMsg: err?.message || "Unknown error" } : r))
+      );
+      showToast("Autopilot failed. Check the activity log.", "error");
+    } finally {
+      setIsSubmittingAutopilot(false);
+    }
+  };
+
+  const handleDownloadFile = async (file: AttachedFile) => {
+    try {
+      const url = await getFileDownloadUrl(accessToken, userId, file.id, file.storagePath);
+      window.open(url, "_blank");
+    } catch (err: any) {
+      showToast(`Download failed: ${err.message}`, "error");
+    }
+  };
+
+  const handleDeleteFile = async (file: AttachedFile) => {
+    if (!confirm(`Delete "${file.fileName}"?`)) return;
+    try {
+      await deleteAttachedFile(accessToken, userId, file.id, file.storagePath);
+      setAttachedFiles((curr) => curr.filter((f) => f.id !== file.id));
+      showToast(`Deleted "${file.fileName}"`);
+    } catch (err: any) {
+      showToast(`Delete failed: ${err.message}`, "error");
+    }
+  };
+
+  // ─── Chat file attach & Drag-and-Drop Ingestion ───
+  const processAndAttachChatFile = async (file: File) => {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) {
+      showToast("File too large for AI chat (max 25MB)", "error");
+      return;
+    }
+
+    const isImage = Boolean(file.type.startsWith("image/") || file.name.match(/\.(png|jpg|jpeg|gif|webp|bmp|svg)$/i));
+    const isPDF = Boolean(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+
+    try {
+      setIsExtractingChatFile(true);
+      let contentText = "";
+      let base64 = "";
+      let dataUrl = "";
+      let pageCount: number | undefined;
+
+      if (isImage) {
+        dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+        contentText = `[IMAGE: ${file.name} (${formatFileSize(file.size)})]`;
+        showToast(`Attached image: ${file.name} 📸`);
+      } else if (isPDF) {
+        showToast(`Reading PDF "${file.name}"... 📄`);
+        const { extractTextFromFile } = await import("./flashcards/pdfExtractor");
+        const extracted = await extractTextFromFile(file);
+        contentText = extracted.text || `[PDF: ${file.name} (${formatFileSize(file.size)})]`;
+        pageCount = extracted.pageCount;
+        showToast(`Attached PDF: ${file.name} (${pageCount || 1} pages) ✨`);
+      } else if (file.type.startsWith("text/") || file.name.match(/\.(txt|md|py|js|ts|tsx|jsx|json|csv|html|css|cpp|c|java|sql)$/i)) {
+        contentText = await file.text();
+        showToast(`Attached ${file.name} 📝`);
+      } else {
+        contentText = await file.text().catch(() => `[Attachment: ${file.name}]`);
+        showToast(`Attached ${file.name}`);
+      }
+
+      setChatFile({
+        name: file.name,
+        size: file.size,
+        type: file.type || (isImage ? "image/jpeg" : isPDF ? "application/pdf" : "application/octet-stream"),
+        content: contentText,
+        isImage,
+        isPdf: isPDF,
+        pageCount,
+        base64,
+        dataUrl,
+      });
+    } catch (err: any) {
+      console.error("[ChatFileAttach] Error reading file:", err);
+      showToast(`Failed reading file: ${err.message}`, "error");
+    } finally {
+      setIsExtractingChatFile(false);
+    }
+  };
+
+  const handleChatFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      await processAndAttachChatFile(e.target.files[0]);
+      e.target.value = "";
+    }
+  };
+
+  // ─── AI Chat Clipboard Paste (Ctrl+V / Cmd+V for images & files) ───
+  const handleChatPaste = async (e: React.ClipboardEvent | ClipboardEvent) => {
+    try {
+      const result = await extractFilesFromClipboard(e);
+      if (result.files.length > 0) {
+        e.preventDefault();
+        const fileToAttach = result.files.find((f) => f.type.startsWith("image/")) || result.files[0];
+        await processAndAttachChatFile(fileToAttach);
+      } else if (result.isLocalFinderFile) {
+        e.preventDefault();
+        showToast(`Finder file "${result.localFileName}" detected: Please drag & drop or click 📎 to attach from Finder.`, "info");
+      }
+    } catch (err) {
+      console.warn("[Dashboard] Chat paste error:", err);
+    }
+  };
+
+  // Window-level paste listener when wide AI chat is open
+  useEffect(() => {
+    if (!isChatMaximized) return;
+
+    const handleWindowPaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && target.tagName === "INPUT" && target.getAttribute("placeholder")?.includes("Dream It AI")) {
+        // Handled by input onPaste
+        return;
+      }
+      if (target && target.tagName === "TEXTAREA") {
+        return;
+      }
+      handleChatPaste(e);
+    };
+
+    window.addEventListener("paste", handleWindowPaste);
+    return () => {
+      window.removeEventListener("paste", handleWindowPaste);
+    };
+  }, [isChatMaximized]);
+
+  const handleChatDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    chatDragCounterRef.current += 1;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsChatDraggingOver(true);
+    }
+  };
+
+  const handleChatDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleChatDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    chatDragCounterRef.current -= 1;
+    if (chatDragCounterRef.current <= 0) {
+      chatDragCounterRef.current = 0;
+      setIsChatDraggingOver(false);
+    }
+  };
+
+  const handleChatDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    chatDragCounterRef.current = 0;
+    setIsChatDraggingOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processAndAttachChatFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  // ─── AI Chat Session Management (History / Past Chats) ───
+  const generateSessionTitle = (text: string): string => {
+    const cleaned = text
+      .replace(/^!\[.*?\]\(.*?\)\s*/, "")
+      .replace(/^(?:📎|📄)\s*\*\*.*?\*\*.*?\n\n/, "")
+      .replace(/^#+\s*/, "")
+      .trim();
+    if (!cleaned) return "Study Question";
+    const firstLine = cleaned.split("\n")[0].trim();
+    if (firstLine.length <= 36) return firstLine;
+    return firstLine.slice(0, 34).trim() + "…";
+  };
+
+  const formatSessionTime = (timestamp: number): string => {
+    if (!timestamp) return "Recent";
+    const diffMs = Date.now() - timestamp;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  // ─── BULLETPROOF session persistence (reads/writes localStorage directly) ───
+  const flushSessionToStorage = useCallback((sessionId: string, msgs: Message[], bumpTimestamp: boolean = true) => {
+    const storageKey = `dreamit_ai_sessions_${userId || "default"}`;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      let sessions: AIChatSession[] = raw ? JSON.parse(raw) : [];
+
+      const firstUserMsg = msgs.find((m) => m.role === "user");
+      const title = firstUserMsg ? generateSessionTitle(firstUserMsg.content) : "New Chat";
+
+      const idx = sessions.findIndex((s) => s.id === sessionId);
+      if (idx >= 0) {
+        sessions[idx] = {
+          ...sessions[idx],
+          messages: msgs,
+          updatedAt: bumpTimestamp ? Date.now() : (sessions[idx].updatedAt || Date.now()),
+          subjectId: chatSubjectId,
+          title: sessions[idx].title === "New Chat" && firstUserMsg ? title : sessions[idx].title,
+        };
+      } else {
+        // Only insert into sessions list if there is an actual user message
+        if (firstUserMsg) {
+          sessions.unshift({
+            id: sessionId,
+            title,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            subjectId: chatSubjectId,
+            messages: msgs,
+          });
+        }
+      }
+
+      // Only keep sessions that have user messages (clean list like ChatGPT / Claude)
+      sessions = sessions.filter((s) => s.messages && s.messages.some((m) => m.role === "user"));
+      sessions.sort((a, b) => {
+        const timeDiff = (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+        if (timeDiff !== 0) return timeDiff;
+        return b.id.localeCompare(a.id);
+      });
+      safeSaveSessionsToStorage(storageKey, sessions);
+      setChatSessions(sessions);
+    } catch (err) {
+      console.warn("Failed writing AI chat sessions to localStorage:", err);
+    }
+  }, [userId, chatSubjectId]);
+
+  // Legacy wrapper so existing callsites still compile
+  const saveCurrentSession = useCallback((updatedMessages: Message[], _customTitle?: string) => {
+    const sid = activeChatSessionIdRef.current;
+    if (sid) {
+      flushSessionToStorage(sid, updatedMessages, true);
+    }
+  }, [flushSessionToStorage]);
+
+  // ─── Chat Session Rename Handlers (ChatGPT / Claude style) ───
+  const handleStartRenameSession = (sessionId: string, currentTitle: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    setRenamingSessionId(sessionId);
+    setRenamingTitleDraft(currentTitle);
+  };
+
+  const handleCancelRenameSession = (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    setRenamingSessionId(null);
+    setRenamingTitleDraft("");
+  };
+
+  const handleSaveRenameSession = (sessionId: string, e?: React.MouseEvent | React.FormEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    const cleanTitle = renamingTitleDraft.trim();
+    if (!cleanTitle) {
+      setRenamingSessionId(null);
+      return;
+    }
+    const storageKey = `dreamit_ai_sessions_${userId || "default"}`;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      let sessions: AIChatSession[] = raw ? JSON.parse(raw) : [];
+      const idx = sessions.findIndex((s) => s.id === sessionId);
+      if (idx >= 0) {
+        sessions[idx] = { ...sessions[idx], title: cleanTitle };
+        safeSaveSessionsToStorage(storageKey, sessions);
+      }
+      setChatSessions(sessions);
+    } catch {}
+    setRenamingSessionId(null);
+    setRenamingTitleDraft("");
+    showToast("Chat renamed ✏️", "success");
+  };
+
+  // ─── Chat Session Pinning Handler (ChatGPT / Claude style) ───
+  const handleTogglePinSession = (sessionId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    const storageKey = `dreamit_ai_sessions_${userId || "default"}`;
+    let isNowPinned = false;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      let sessions: AIChatSession[] = raw ? JSON.parse(raw) : chatSessions;
+      const idx = sessions.findIndex((s) => s.id === sessionId);
+      if (idx >= 0) {
+        isNowPinned = !sessions[idx].isPinned;
+        sessions[idx] = { ...sessions[idx], isPinned: isNowPinned };
+        safeSaveSessionsToStorage(storageKey, sessions);
+        setChatSessions([...sessions]);
+      }
+    } catch (err) {
+      console.warn("Failed toggling pin status:", err);
+    }
+    setOpenMenuSessionId(null);
+    showToast(isNowPinned ? "Chat pinned 📌" : "Chat unpinned", "info");
+  };
+
+  // Close 3-dots chat menu when clicking outside
+  useEffect(() => {
+    if (!openMenuSessionId) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-chat-menu-trigger]") && !target.closest("[data-chat-menu-dropdown]")) {
+        setOpenMenuSessionId(null);
+      }
+    };
+    window.addEventListener("mousedown", handleOutsideClick);
+    return () => window.removeEventListener("mousedown", handleOutsideClick);
+  }, [openMenuSessionId]);
+
+  // ─── AI Chat — Backend Powered Dream It AI ───
+  const askCoach = async (e?: FormEvent, customQuery?: string, overrideHistory?: Message[]) => {
+    if (e) e.preventDefault();
+    const rawQuestion = customQuery || chatDraft.trim();
+    if (!rawQuestion && !chatFile && !isAsking) return;
+
+    const questionText = rawQuestion || (chatFile ? (chatFile.isImage ? "Please analyze this image in detail." : `Please analyze attached document: ${chatFile.name}`) : "");
+    const attachedFileBackup = chatFile;
+
+    const displayMessage = attachedFileBackup
+      ? (attachedFileBackup.isImage && attachedFileBackup.dataUrl
+          ? `![${attachedFileBackup.name}](${attachedFileBackup.dataUrl})\n\n📎 **${attachedFileBackup.name}** (${formatFileSize(attachedFileBackup.size)})\n\n${questionText}`
+          : attachedFileBackup.isPdf
+            ? `📄 **${attachedFileBackup.name}** (${attachedFileBackup.pageCount ? `${attachedFileBackup.pageCount} pages, ` : ""}${formatFileSize(attachedFileBackup.size)})\n\n${questionText}`
+            : `📎 **${attachedFileBackup.name}** (${formatFileSize(attachedFileBackup.size)})\n\n${questionText}`)
+      : questionText;
+
+    const promptForAI = attachedFileBackup
+      ? (attachedFileBackup.isImage
+          ? questionText
+          : `[ATTACHED DOCUMENT: ${attachedFileBackup.name} (${attachedFileBackup.pageCount ? `${attachedFileBackup.pageCount} pages, ` : ""}${formatFileSize(attachedFileBackup.size)})]\n--- DOCUMENT CONTENT START ---\n${attachedFileBackup.content.slice(0, 25000)}\n--- DOCUMENT CONTENT END ---\n\nUser Question: ${questionText}`)
+      : questionText;
+
+    let currentSessionId = activeChatSessionIdRef.current || activeChatSessionId;
+    if (!currentSessionId) {
+      currentSessionId = "session_" + Date.now();
+      activeChatSessionIdRef.current = currentSessionId;
+      setActiveChatSessionId(currentSessionId);
+    }
+
+    const baseHistory = overrideHistory ?? messages;
+    const nextUserMessages: Message[] = [...baseHistory, { role: "user", content: displayMessage }];
+    setMessages(nextUserMessages);
+    messagesRef.current = nextUserMessages;
+    flushSessionToStorage(currentSessionId, nextUserMessages);
+    if (!customQuery) setChatDraft("");
+    setChatFile(null);
+    setIsAsking(true);
+
+    // Strip heavy base64 data URLs from history to keep memory & network payload ultra lean
+    const chatHistory = baseHistory.slice(-8).map((m) => ({
+      role: m.role,
+      content: m.content.replace(/!\[(.*?)\]\(data:image\/[^;]+;base64,[^)]+\)/g, "[Attached Image: $1]"),
+    }));
+
+    const availableSubsList = subjects.map((s) => s.name).join(", ");
+    let systemPrompt = `You are Dream It AI, an expert, encouraging study assistant for students. Help with study planning, course concepts, mathematics step-by-step working, code debugging, and flashcards. Be concise, well-structured, and use markdown formatting. If the user attaches an image or architecture diagram, provide a thorough, structured visual breakdown: identify all components, arrows/flows, technologies, and step-by-step explanations.
+
+WORKSPACE EXECUTIVE POWERS:
+You have direct executive power to save notes and flashcards into the student's study workspace.
+Current available subjects: [${availableSubsList}].
+
+1. SAVING TO NOTES:
+When the user asks you to save study notes, summaries, derivations, or problem solutions (e.g., "save it on my notes page", "save to notes", "add to chemistry notes", "save this note", "do that again at chemistry subject"):
+- Confirm clearly what was saved, the topic title, and the subject notebook.
+- At the very end of your response, you MUST output this exact action block:
+\`\`\`action:save_note
+{
+  "subject": "Subject Name (e.g. Chemistry, Physics, or general)",
+  "title": "Clear Topic Title",
+  "content": "Full markdown note content"
+}
+\`\`\`
+
+2. CREATING & SAVING FLASHCARDS:
+When the user asks you to make or save flashcards (e.g., "make a flash card and save it", "create flashcards and save them"):
+- Present the flashcards clearly.
+- At the very end of your response, you MUST output this exact action block:
+\`\`\`action:save_flashcards
+{
+  "subject": "Subject Name",
+  "cards": [
+    { "front": "Question / Prompt", "back": "Answer / Key Principle" }
+  ]
+}
+\`\`\`
+`;
+
+    if (chatSubjectId !== null) {
+      const subject = subjects.find(s => s.id === chatSubjectId);
+      const subjectNotes = notes.filter(n => n.subjectId === chatSubjectId);
+      const notesContext = subjectNotes.map(n => `Title: ${n.title}\nContent:\n${n.content}`).join("\n\n---\n\n");
+      
+      systemPrompt = `You are Dream It AI, acting as a strict Source-Grounded Tutor for the subject "${subject?.name || 'Selected Subject'}". 
+You MUST answer the user's questions ONLY using the following provided notes for this subject.
+If the answer cannot be found in the provided notes, you MUST refuse to answer and honestly state: "This is not covered in your uploaded materials for ${subject?.name || 'this subject'}." Do NOT use your general knowledge.
+When you provide an answer from the notes, you MUST include an inline citation naming the source file, formatted like this: (Source: [Note Title]).
+
+SUBJECT NOTES KNOWLEDGE BASE:
+${notesContext ? notesContext : "(No notes uploaded for this subject yet. You must refuse to answer any subject-specific questions until materials are provided.)"}
+
+WORKSPACE EXECUTIVE POWERS:
+You can save notes and flashcards. When asked to save to notes or create flashcards, append the action command blocks at the very end.`;
+    }
+
+    let accumulatedStreamedText = "";
+    try {
+      // Create empty message for streaming
+      setMessages((curr) => {
+        const next = [...curr, { role: "assistant", content: "" }];
+        messagesRef.current = next;
+        return next;
+      });
+
+      const response = await fetchAI({
+        model: "nvidia/nemotron-3.5-super-vl-120b-a12b",
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...chatHistory.map((m) => ({ role: m.role, content: m.content })),
+          { role: "user", content: promptForAI },
+        ],
+        image: attachedFileBackup?.isImage && attachedFileBackup.base64 ? {
+          name: attachedFileBackup.name,
+          mimeType: attachedFileBackup.type,
+          base64Data: attachedFileBackup.base64,
+          dataUrl: attachedFileBackup.dataUrl,
+        } : undefined,
+        max_tokens: 2048,
+        temperature: chatSubjectId ? 0.1 : 0.4,
+        onChunk: (chunk: string) => {
+          accumulatedStreamedText += chunk;
+          if (activeChatSessionIdRef.current === currentSessionId) {
+            setMessages((curr) => {
+              const updated = [...curr];
+              const last = updated[updated.length - 1];
+              if (last && last.role === "assistant") {
+                last.content = accumulatedStreamedText;
+              }
+              messagesRef.current = updated;
+              return updated;
+            });
+          }
+        }
+      });
+
+      if (response.error) {
+        const errorMessages: Message[] = [
+          ...nextUserMessages,
+          { role: "assistant", content: `⚠️ **Dream It AI**: ${response.error}` },
+        ];
+        if (activeChatSessionIdRef.current === currentSessionId) {
+          setMessages(errorMessages);
+          messagesRef.current = errorMessages;
+        }
+        flushSessionToStorage(currentSessionId, errorMessages);
+      } else {
+        addXP(2);
+
+        // ─── Process AI Content Reliably ───
+        let fullContent = (response.content || accumulatedStreamedText || "").trim();
+        if (!fullContent && messagesRef.current.length > 0) {
+          const lastMsg = messagesRef.current[messagesRef.current.length - 1];
+          if (lastMsg && lastMsg.role === "assistant" && lastMsg.content) {
+            fullContent = lastMsg.content.trim();
+          }
+        }
+        if (!fullContent) {
+          fullContent = "I've analyzed your question. How can I help you further with your studies?";
+        }
+
+        const isSaveNoteIntent = /(?:save|add|put|store|write).*(?:note|notes|notebook|page)/i.test(questionText);
+        const isFlashcardIntent = /(?:flash ?card|flashcard).*(?:save|create|make|add)/i.test(questionText) ||
+                                  /(?:create|make|generate).*(?:flash ?card|flashcard)/i.test(questionText);
+
+        let actionExecuted = false;
+
+        // 1. Parse structured action:save_note
+        const noteActionRegex = /```action:save_note\s*([\s\S]*?)\s*```/;
+        const noteMatch = fullContent.match(noteActionRegex);
+        if (noteMatch) {
+          try {
+            const actionData = JSON.parse(noteMatch[1]);
+            executeSaveNoteFromAI({
+              title: actionData.title || "Study Note",
+              content: actionData.content || fullContent.replace(noteActionRegex, "").trim(),
+              subjectName: actionData.subject || undefined,
+              subjectId: chatSubjectId ?? undefined,
+            });
+            actionExecuted = true;
+            fullContent = fullContent.replace(noteActionRegex, "").trim();
+          } catch (err) {
+            console.warn("Failed parsing action:save_note block:", err);
+          }
+        }
+
+        // 2. Parse structured action:save_flashcards
+        const flashcardActionRegex = /```action:save_flashcards\s*([\s\S]*?)\s*```/;
+        const fcMatch = fullContent.match(flashcardActionRegex);
+        if (fcMatch) {
+          try {
+            const actionData = JSON.parse(fcMatch[1]);
+            if (Array.isArray(actionData.cards) && actionData.cards.length > 0) {
+              executeSaveFlashcardsFromAI({
+                subjectName: actionData.subject || undefined,
+                subjectId: chatSubjectId ?? undefined,
+                cards: actionData.cards,
+              });
+              actionExecuted = true;
+              fullContent = fullContent.replace(flashcardActionRegex, "").trim();
+            }
+          } catch (err) {
+            console.warn("Failed parsing action:save_flashcards block:", err);
+          }
+        }
+
+        // 3. Robust Fallback: If user asked to save to notes or AI claimed it saved to notes
+        if (!actionExecuted && (isSaveNoteIntent || /(?:saved to your (?:notes|notebook)|added to your .* notes|stored in your .* notebook|updated under your .* notebook)/i.test(fullContent))) {
+          let targetSubName = "";
+          const subMention = subjects.find(
+            (s) =>
+              new RegExp(`\\b${s.name}\\b`, "i").test(questionText) ||
+              new RegExp(`\\b${s.name}\\b`, "i").test(fullContent)
+          );
+          if (subMention) {
+            targetSubName = subMention.name;
+          } else {
+            const rawSubMatch = questionText.match(/(?:at|in|to|for)\s+([a-zA-Z]+)(?:\s+subject|\s+notes?)?/i);
+            if (rawSubMatch && !["my", "the", "this", "your"].includes(rawSubMatch[1].toLowerCase())) {
+              targetSubName = rawSubMatch[1];
+            }
+          }
+
+          let contentToSave = fullContent;
+          if (contentToSave.length < 120) {
+            const prevAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content && m.content.length > 60);
+            if (prevAssistant) {
+              contentToSave = prevAssistant.content;
+            }
+          }
+
+          const headingMatch = contentToSave.match(/^#+\s*(.+)$/m) || contentToSave.match(/\*\*(?:Chapter|Topic|Title):\s*([^*]+)\*\*/i);
+          let noteTitle = headingMatch ? headingMatch[1].replace(/[*#]/g, "").trim() : "";
+          if (!noteTitle) {
+            if (/Lanthanoids/i.test(contentToSave) || /Actinoids/i.test(contentToSave)) {
+              noteTitle = "Chapter: f-Block Elements & Coordination/d-Block Compounds";
+            } else {
+              noteTitle = targetSubName ? `${targetSubName} Study Notes` : "Study Notes";
+            }
+          }
+
+          executeSaveNoteFromAI({
+            title: noteTitle,
+            content: contentToSave,
+            subjectName: targetSubName || undefined,
+            subjectId: chatSubjectId ?? undefined,
+          });
+          actionExecuted = true;
+        }
+
+        // 4. Robust Fallback: If user asked to make flashcards and save them
+        if (!actionExecuted && isFlashcardIntent) {
+          const extractedCards: Array<{ front: string; back: string }> = [];
+          const cardRegex = /(?:Front|Q|Question|\d+\.\s*(?:Front|Q|Question)?):\s*([\s\S]*?)(?:Back|A|Answer):\s*([\s\S]*?)(?=(?:Front|Q|Question|\d+\.\s*(?:Front|Q|Question)?):|$)/gi;
+          let cMatch;
+          while ((cMatch = cardRegex.exec(fullContent)) !== null) {
+            const front = cMatch[1].trim();
+            const back = cMatch[2].trim();
+            if (front && back) {
+              extractedCards.push({ front, back });
+            }
+          }
+
+          if (extractedCards.length > 0) {
+            let targetSubName = "";
+            const subMention = subjects.find((s) => new RegExp(`\\b${s.name}\\b`, "i").test(questionText));
+            if (subMention) targetSubName = subMention.name;
+
+            executeSaveFlashcardsFromAI({
+              subjectName: targetSubName || undefined,
+              subjectId: chatSubjectId ?? undefined,
+              cards: extractedCards,
+            });
+            actionExecuted = true;
+          }
+        }
+
+        // Update messages with the final cleaned content and persist session
+        const finalMessages: Message[] = [
+          ...nextUserMessages,
+          { role: "assistant", content: fullContent },
+        ];
+        if (activeChatSessionIdRef.current === currentSessionId) {
+          setMessages(finalMessages);
+          messagesRef.current = finalMessages;
+        }
+        flushSessionToStorage(currentSessionId, finalMessages);
+      }
+    } catch (e) {
+      console.warn("AI fallback notice:", e);
+      const errorMessages: Message[] = [
+        ...nextUserMessages,
+        { role: "assistant", content: "⚠️ **Dream It AI**: An unexpected error occurred. Please try again." },
+      ];
+      if (activeChatSessionIdRef.current === currentSessionId) {
+        setMessages(errorMessages);
+        messagesRef.current = errorMessages;
+      }
+      flushSessionToStorage(currentSessionId, errorMessages);
+    } finally {
+      setIsAsking(false);
+    }
+  };
+
+  // ─── AI Message Action Handlers (Copy, Share, Edit, Regenerate) ───
+  const getCleanMessageText = (content: string) => {
+    return content
+      .replace(/^!\[.*?\]\(.*?\)\s*/, "")
+      .replace(/^(?:📎|📄)\s*\*\*.*?\*\*.*?\n\n/, "")
+      .trim();
+  };
+
+  const handleCopyMessage = async (content: string, idx: number) => {
+    const textToCopy = getCleanMessageText(content);
+    try {
+      if (typeof navigator !== "undefined" && navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(textToCopy);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = textToCopy;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      setCopiedMessageIdx(idx);
+      showToast("Copied to clipboard! 📋", "success");
+      setTimeout(() => {
+        setCopiedMessageIdx((curr) => (curr === idx ? null : curr));
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+      showToast("Failed to copy message", "error");
+    }
+  };
+
+  const handleShareMessage = async (content: string) => {
+    const textToShare = getCleanMessageText(content);
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try {
+        await navigator.share({
+          title: "Dream It AI",
+          text: textToShare,
+        });
+        return;
+      } catch (err: any) {
+        if (err.name === "AbortError") return;
+      }
+    }
+    // Fallback: copy to clipboard
+    try {
+      if (typeof navigator !== "undefined" && navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(textToShare);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = textToShare;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      showToast("Content copied to clipboard to share! 🚀", "success");
+    } catch {
+      showToast("Unable to share content", "error");
+    }
+  };
+
+  const handleStartEditMessage = (idx: number, content: string) => {
+    setEditingMessageIdx(idx);
+    setEditingMessageDraft(getCleanMessageText(content));
+  };
+
+  const handleCancelEditMessage = () => {
+    setEditingMessageIdx(null);
+    setEditingMessageDraft("");
+  };
+
+  const handleSaveAndSubmitEdit = (idx: number) => {
+    const trimmed = editingMessageDraft.trim();
+    if (!trimmed || isAsking) return;
+    setEditingMessageIdx(null);
+    setEditingMessageDraft("");
+    // Truncate messages to before this edited message, then re-ask with edited prompt
+    const historyToKeep = messages.slice(0, idx);
+    askCoach(undefined, trimmed, historyToKeep);
+  };
+
+  const handleRegenerateResponse = (idx: number) => {
+    if (isAsking) return;
+    let userIdx = idx - 1;
+    while (userIdx >= 0 && messages[userIdx].role !== "user") {
+      userIdx--;
+    }
+    if (userIdx >= 0) {
+      const userMsg = messages[userIdx];
+      const historyToKeep = messages.slice(0, userIdx);
+      const promptToReask = getCleanMessageText(userMsg.content);
+      askCoach(undefined, promptToReask, historyToKeep);
+    }
+  };
+
+  const handleNewChat = useCallback(() => {
+    // 1. If current session has user messages, save it without modifying its timestamp
+    const curId = activeChatSessionIdRef.current;
+    const curMsgs = messagesRef.current;
+    if (curId && curMsgs.some((m) => m.role === "user")) {
+      flushSessionToStorage(curId, curMsgs, false);
+    }
+
+    // 2. Start fresh session on screen WITHOUT creating an empty placeholder in sidebar
+    const newId = "session_" + Date.now();
+    activeChatSessionIdRef.current = newId;
+    setActiveChatSessionId(newId);
+    setMessages([DEFAULT_WELCOME_MESSAGE]);
+    messagesRef.current = [DEFAULT_WELCOME_MESSAGE];
+    setShowPastChatsDrawer(false);
+    setEditingMessageIdx(null);
+    setChatDraft("");
+    setChatFile(null);
+    showToast("Started new chat ✨", "info");
+  }, [showToast, flushSessionToStorage]);
+
+  const handleSelectSession = useCallback((sessionId: string) => {
+    const curId = activeChatSessionIdRef.current;
+    if (curId === sessionId) {
+      setShowPastChatsDrawer(false);
+      return;
+    }
+
+    // 1. Read session from localStorage (ground truth)
+    const storageKey = `dreamit_ai_sessions_${userId || "default"}`;
+    let session: AIChatSession | undefined;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed: AIChatSession[] = JSON.parse(raw);
+        session = parsed.find((s) => s.id === sessionId);
+      }
+    } catch {}
+
+    if (!session) {
+      session = chatSessions.find((s) => s.id === sessionId);
+    }
+    if (!session) return;
+
+    // 2. Switch to selected session - DO NOT TOUCH timestamps or reorder sessions!
+    const targetMsgs = session.messages && session.messages.length > 0 ? session.messages : [DEFAULT_WELCOME_MESSAGE];
+    activeChatSessionIdRef.current = session.id;
+    setActiveChatSessionId(session.id);
+    setMessages(targetMsgs);
+    messagesRef.current = targetMsgs;
+    if (session.subjectId !== undefined) {
+      setChatSubjectId(session.subjectId);
+    }
+    setEditingMessageIdx(null);
+    setShowPastChatsDrawer(false);
+  }, [userId, chatSessions]);
+
+  const handleDeleteSession = (sessionId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+
+    const storageKey = `dreamit_ai_sessions_${userId || "default"}`;
+    let updatedSessions: AIChatSession[] = [];
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const existing: AIChatSession[] = raw ? JSON.parse(raw) : chatSessions;
+      updatedSessions = existing.filter((s) => s.id !== sessionId);
+      safeSaveSessionsToStorage(storageKey, updatedSessions);
+    } catch {
+      updatedSessions = chatSessions.filter((s) => s.id !== sessionId);
+    }
+
+    setChatSessions(updatedSessions);
+
+    const isCurrentActive = (activeChatSessionIdRef.current || activeChatSessionId) === sessionId;
+    if (isCurrentActive) {
+      const validNext = updatedSessions.filter((s) => s.messages && s.messages.some((m) => m.role === "user"));
+      if (validNext.length > 0) {
+        const nextActive = validNext[0];
+        const nextMsgs = nextActive.messages?.length ? nextActive.messages : [DEFAULT_WELCOME_MESSAGE];
+        activeChatSessionIdRef.current = nextActive.id;
+        setActiveChatSessionId(nextActive.id);
+        setMessages(nextMsgs);
+        messagesRef.current = nextMsgs;
+        if (nextActive.subjectId !== undefined) {
+          setChatSubjectId(nextActive.subjectId);
+        }
+      } else {
+        const freshId = "session_" + Date.now();
+        activeChatSessionIdRef.current = freshId;
+        setActiveChatSessionId(freshId);
+        setMessages([DEFAULT_WELCOME_MESSAGE]);
+        messagesRef.current = [DEFAULT_WELCOME_MESSAGE];
+      }
+    }
+
+    showToast("Chat deleted", "info");
+  };
+
+  // Load chat sessions on mount / userId change
+  useEffect(() => {
+    const storageKey = `dreamit_ai_sessions_${userId || "default"}`;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed: AIChatSession[] = JSON.parse(raw);
+        // Only load conversations that have user messages (clean list like ChatGPT / Claude)
+        const valid = Array.isArray(parsed)
+          ? parsed
+              .filter((s) => s.messages && s.messages.some((m) => m.role === "user"))
+              .sort((a, b) => {
+                const timeDiff = (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+                if (timeDiff !== 0) return timeDiff;
+                return b.id.localeCompare(a.id);
+              })
+          : [];
+        if (valid.length > 0) {
+          if (valid.length !== parsed.length) {
+            safeSaveSessionsToStorage(storageKey, valid);
+          }
+          setChatSessions(valid);
+
+          // Restore user's most recent active chat conversation so chat history stays persistent across reloads
+          const latest = valid[0];
+          setActiveChatSessionId(latest.id);
+          activeChatSessionIdRef.current = latest.id;
+          setMessages(latest.messages && latest.messages.length > 0 ? latest.messages : [DEFAULT_WELCOME_MESSAGE]);
+          messagesRef.current = latest.messages && latest.messages.length > 0 ? latest.messages : [DEFAULT_WELCOME_MESSAGE];
+          if (latest.subjectId !== undefined) {
+            setChatSubjectId(latest.subjectId);
+          }
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Failed loading AI chat sessions from localStorage:", e);
+    }
+
+    // If no previous chats exist, initialize with a fresh welcome session
+    const freshId = "session_" + Date.now();
+    setActiveChatSessionId(freshId);
+    activeChatSessionIdRef.current = freshId;
+    setMessages([DEFAULT_WELCOME_MESSAGE]);
+    messagesRef.current = [DEFAULT_WELCOME_MESSAGE];
+    setChatDraft("");
+    setChatFile(null);
+  }, [userId]);
+
+  // Global Ctrl+N / Cmd+N shortcut for New Chat in Wide Mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n" && isChatMaximized) {
+        e.preventDefault();
+        handleNewChat();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isChatMaximized, handleNewChat]);
+
+  // ─── Nav Items ───
+  const navItems: { label: NavItem; icon: any; displayLabel?: string }[] = [
+    { label: "Today", icon: LayoutDashboard },
+    { label: "Planner", icon: CalendarDays },
+    { label: "Projects", icon: Folder, displayLabel: "Subjects" },
+    { label: "Focus", icon: Target },
+    { label: "Notes", icon: Notebook },
+    { label: "Grades", icon: GraduationCap },
+    { label: "Cards", icon: Layers },
+    { label: "Money", icon: Wallet },
+    { label: "Exams", icon: Award, displayLabel: "Mock Tests" },
+  ];
+
+  const isExpanded = mobileOpen || isSidebarHovered;
+
+  // ═══════════════════════════════════ RENDER ═══════════════════════════════════
+  return (
+    <main className={`dreamit-dash min-h-screen w-full min-w-0 max-w-full overflow-x-hidden font-[DM_Sans] ${themeConfig.cssClass}`} style={{ backgroundColor: "var(--m-bg)", color: "var(--m-text)" }}>
+      {/* ─── Sidebar ─── */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r transition-all duration-300 overflow-x-hidden ${
+          mobileOpen ? "translate-x-0 w-64" : "-translate-x-full lg:translate-x-0"
+        } ${!mobileOpen && isExpanded ? "lg:w-64" : "lg:w-[76px]"}`}
+        onMouseEnter={() => setIsSidebarHovered(true)}
+        onMouseLeave={() => setIsSidebarHovered(false)}
+        style={{
+          backgroundColor: "var(--m-sidebar-bg)",
+          borderColor: "var(--m-border-light)",
+        }}
+      >
+        {/* Brand Header */}
+        <div className={`flex h-16 items-center border-b transition-all duration-300 ${isExpanded ? "justify-between px-5" : "justify-center px-0"}`} style={{ borderColor: "var(--m-border-light)" }}>
+          <div className="flex items-center">
+            <div className="grid size-9 shrink-0 place-items-center rounded-xl text-xs font-bold shadow-xs" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+              <BookOpenCheck size={18} />
+            </div>
+            <span className={`font-[Roboto_Slab] text-lg font-bold tracking-tight whitespace-nowrap overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[150px] opacity-100 ml-2.5" : "max-w-0 opacity-0 ml-0"}`} style={{ color: "var(--m-text-heading)" }}>
+              Dream It
+            </span>
+          </div>
+          <button className={`p-1 rounded-lg hover:opacity-75 lg:hidden overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[40px] opacity-100" : "max-w-0 opacity-0"}`} onClick={() => setMobileOpen(false)} aria-label="Close menu">
+            <X size={18} className="shrink-0" />
+          </button>
+        </div>
+
+        {/* Scrollable Body of Sidebar */}
+        <div className={`flex-1 overflow-y-auto custom-scrollbar py-4 space-y-5 overflow-x-hidden transition-all duration-300 ${isExpanded ? "px-5" : "px-3"}`}>
+          {/* User Info Card */}
+          <div 
+            onClick={() => setIsProfileOpen(true)}
+            className={`rounded-xl minimal-inset feature-zoom transition-all duration-300 cursor-pointer hover:opacity-80 ${isExpanded ? "p-3" : "p-2 flex flex-col items-center"}`}
+          >
+            <div className="flex items-center w-full">
+              {userImageUrl ? (
+                <img src={userImageUrl} alt={userNameDisplay} className="size-8 rounded-full object-cover shrink-0 mx-auto" />
+              ) : (
+                <div className="grid size-8 shrink-0 place-items-center rounded-full text-xs font-bold mx-auto" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                  {userNameDisplay.charAt(0)}
+                </div>
+              )}
+              <div className={`min-w-0 flex-1 overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[200px] opacity-100 ml-2.5" : "max-w-0 opacity-0 ml-0"}`}>
+                <p className="truncate text-xs font-bold" style={{ color: "var(--m-primary)" }}>{userNameDisplay}</p>
+                <p className="truncate text-[10px]" style={{ color: "var(--m-text-sub)" }}>{userEmail}</p>
+              </div>
+            </div>
+            <div className={`overflow-hidden transition-all duration-300 w-full ${isExpanded ? "max-h-[100px] opacity-100 mt-2" : "max-h-0 opacity-0 mt-0"}`}>
+              <div className="flex items-center justify-between pt-2 text-[10px]" style={{ borderTop: "1px solid var(--m-border)" }}>
+                <span className="flex items-center gap-1 font-medium whitespace-nowrap" style={{ color: "var(--m-text-sub)" }}>
+                  {isSaving ? (
+                    <><Cloud size={12} className="animate-pulse shrink-0" style={{ color: "var(--m-warning)" }} /> Saving...</>
+                  ) : (
+                    <><CheckCircle2 size={12} className="shrink-0" style={{ color: "var(--m-success)" }} /> Synced</>
+                  )}
+                </span>
+                {/* XP & Level Badge */}
+                <span className="flex items-center gap-1 font-bold whitespace-nowrap" style={{ color: "var(--m-primary)" }}>
+                  <Star size={10} className="shrink-0" /> Lv.{streak.level} {getLevelTitle(streak.level)}
+                </span>
+              </div>
+              {/* XP Progress Bar */}
+              <div className="mt-3">
+                <div className="flex items-center justify-between text-[9px] font-[DM_Mono] whitespace-nowrap" style={{ color: "var(--m-text-muted)" }}>
+                  <span>{streak.totalXP} XP</span>
+                  <span>{getXPForNextLevel(streak.level)} XP</span>
+                </div>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full" style={{ backgroundColor: "var(--m-border)" }}>
+                  <div className="h-full rounded-full transition-all duration-500" style={{
+                    width: `${Math.min(100, (streak.totalXP / getXPForNextLevel(streak.level)) * 100)}%`,
+                    backgroundColor: "var(--m-primary)",
+                  }} />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Navigation Links */}
+          <div>
+            <p className={`px-1 text-[10px] font-medium uppercase tracking-wider overflow-hidden transition-all duration-300 ${isExpanded ? "max-h-[20px] opacity-100 mb-2" : "max-h-0 opacity-0 mb-0"}`} style={{ color: "var(--m-text-muted)" }}>
+              Menu
+            </p>
+            <nav className="space-y-1">
+              {navItems.map(({ label, icon: Icon, displayLabel }) => (
+                <button
+                  key={label}
+                  onClick={() => { setActiveNav(label); setMobileOpen(false); }}
+                  className={`flex items-center rounded-xl transition-all duration-300 feature-chip ${
+                    isExpanded ? "w-full px-3.5 py-2.5" : "w-10 h-10 justify-center mx-auto"
+                  }`}
+                  style={
+                    activeNav === label
+                      ? { backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)", fontWeight: 600 }
+                      : { color: "var(--m-text-sub)" }
+                  }
+                  title={!isExpanded ? (displayLabel || label) : undefined}
+                >
+                  <Icon size={17} className="shrink-0" />
+                  <span className={`text-sm font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[200px] opacity-100 ml-3" : "max-w-0 opacity-0 ml-0"}`}>{displayLabel || label}</span>
+                </button>
+              ))}
+
+              <a
+                href="/cadence"
+                className={`flex items-center rounded-xl transition-all duration-300 feature-chip ${
+                  isExpanded ? "w-full px-3.5 py-2.5" : "w-10 h-10 justify-center mx-auto"
+                }`}
+                style={{ color: "var(--m-text-sub)" }}
+                title={!isExpanded ? "Cadence Screening" : undefined}
+              >
+                <Activity size={17} className="shrink-0" />
+                <span className={`text-sm font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[200px] opacity-100 ml-3" : "max-w-0 opacity-0 ml-0"}`}>Cadence Screening</span>
+              </a>
+            </nav>
+          </div>
+
+          {/* Subjects / Courses */}
+          <div>
+            <div className={`flex items-center justify-between px-1 overflow-hidden transition-all duration-300 ${isExpanded ? "max-h-[20px] opacity-100" : "max-h-0 opacity-0"}`}>
+              <p className="text-[10px] font-medium uppercase tracking-wider whitespace-nowrap" style={{ color: "var(--m-text-muted)" }}>
+                Subjects
+              </p>
+              <button
+                type="button"
+                onClick={() => setSubjectsOpen(true)}
+                className="text-[10px] font-bold flex items-center gap-0.5 hover:underline whitespace-nowrap shrink-0"
+                style={{ color: "var(--m-primary)" }}
+              >
+                <Plus size={11} /> Add
+              </button>
+            </div>
+            <div className={`mt-2 space-y-1 text-sm transition-all duration-300 ${isExpanded ? "px-1" : "px-0"}`}>
+              <button
+                onClick={() => { setSelectedSubject("All subjects"); setActiveNav("Today"); setMobileOpen(false); }}
+                className={`flex items-center rounded-xl transition-all duration-300 feature-chip ${
+                  isExpanded ? "w-full px-2.5 py-2 text-left" : "w-10 h-10 justify-center mx-auto"
+                }`}
+                style={selectedSubject === "All subjects" ? { backgroundColor: "var(--m-surface-alt)", fontWeight: 700, color: "var(--m-primary)" } : { color: "var(--m-text-sub)" }}
+                title={!isExpanded ? "All subjects" : undefined}
+              >
+                <span className="size-2.5 rounded-full shrink-0" style={{ backgroundColor: "var(--m-primary)" }} />
+                <span className={`truncate text-xs whitespace-nowrap overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[200px] opacity-100 ml-2.5" : "max-w-0 opacity-0 ml-0"}`}>All subjects</span>
+              </button>
+              {subjects.map((sub) => (
+                <button
+                  key={sub.id}
+                  onClick={() => { setSelectedSubject(sub.name); setActiveNav("Today"); setMobileOpen(false); }}
+                  className={`flex items-center rounded-xl transition-all duration-300 feature-chip ${
+                    isExpanded ? "w-full px-2.5 py-2 text-left" : "w-10 h-10 justify-center mx-auto"
+                  }`}
+                  style={selectedSubject === sub.name ? { backgroundColor: "var(--m-surface-alt)", fontWeight: 700, color: "var(--m-primary)" } : { color: "var(--m-text-sub)" }}
+                  title={!isExpanded ? sub.name : undefined}
+                >
+                  <span className="size-2.5 rounded-full shrink-0" style={{ backgroundColor: sub.color }} />
+                  <span className={`truncate text-xs whitespace-nowrap overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[200px] opacity-100 ml-2.5" : "max-w-0 opacity-0 ml-0"}`}>{sub.name}</span>
+                </button>
+              ))}
+              <div className={`overflow-hidden transition-all duration-300 ${isExpanded ? "max-h-[50px] opacity-100 mt-2" : "max-h-0 opacity-0 mt-0"}`}>
+                <button onClick={() => { setSubjectsOpen(true); setMobileOpen(false); }} className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs font-bold hover:opacity-80 feature-chip" style={{ color: "var(--m-primary)" }}>
+                  <FolderPlus size={14} className="shrink-0" /><span className="whitespace-nowrap">+ Add / Manage Subjects</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Streak & Export Card */}
+          <div className={`overflow-hidden transition-all duration-300 ${isExpanded ? "max-h-[200px] opacity-100 mt-5" : "max-h-0 opacity-0 mt-0"}`}>
+            <div className="rounded-xl p-3 text-xs minimal-inset feature-zoom">
+              <div className="flex items-center gap-2 font-medium whitespace-nowrap" style={{ color: "var(--m-text-heading)" }}>
+                <Flame size={14} style={{ color: "var(--m-warning)" }} className="shrink-0" />
+                <span>{streak.currentStreak} day streak</span>
+              </div>
+              <div className="mt-2.5 flex gap-1.5">
+                <button onClick={exportDataJSON} className="flex-1 rounded-lg py-1.5 text-[10px] font-bold transition hover:opacity-80 whitespace-nowrap" style={{ backgroundColor: "var(--m-surface)", color: "var(--m-primary)", border: "1px solid var(--m-border)" }}>
+                  Export JSON
+                </button>
+                <button onClick={exportTasksCSV} className="flex-1 rounded-lg py-1.5 text-[10px] font-bold transition hover:opacity-80 whitespace-nowrap" style={{ backgroundColor: "var(--m-surface)", color: "var(--m-primary)", border: "1px solid var(--m-border)" }}>
+                  Export CSV
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom Actions */}
+        <div className={`border-t transition-all duration-300 ${isExpanded ? "py-4 px-5 space-y-2" : "py-4 px-3 flex flex-col items-center space-y-3"}`} style={{ borderColor: "var(--m-border-light)" }}>
+          {canInstallPWA && (
+            <button
+              onClick={() => promptPWAInstall()}
+              className={`flex items-center rounded-xl transition-all duration-300 minimal-surface feature-chip ${
+                isExpanded ? "w-full px-3 py-2 text-left" : "w-10 h-10 justify-center"
+              }`}
+              style={{ color: "var(--m-primary)", borderColor: "var(--m-primary)" }}
+              title={!isExpanded ? "Install App (PWA)" : undefined}
+            >
+              <Download size={14} className="shrink-0 animate-pulse" />
+              <span className={`text-xs font-bold whitespace-nowrap overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[100px] opacity-100 ml-2" : "max-w-0 opacity-0 ml-0"}`}>
+                Install App
+              </span>
+            </button>
+          )}
+
+          <button onClick={() => setThemeSelectorOpen(true)} className={`flex items-center rounded-xl transition-all duration-300 minimal-surface feature-chip ${isExpanded ? "w-full px-3 py-2.5 justify-between" : "w-10 h-10 justify-center"}`} title={!isExpanded ? "Change Theme" : undefined}>
+            <span className="flex items-center">
+              <Palette size={15} className="shrink-0" />
+              <span className={`text-xs font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[100px] opacity-100 ml-2" : "max-w-0 opacity-0 ml-0"}`}>{themeConfig.name}</span>
+            </span>
+            <span className={`flex items-center overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[100px] opacity-100 gap-1.5" : "max-w-0 opacity-0 gap-0"}`}>
+              {themeConfig.swatches.slice(0, 3).map((color, i) => (
+                <span key={i} className="inline-block size-3 shrink-0 rounded-full" style={{ backgroundColor: color, border: '1px solid var(--m-border-light)' }} />
+              ))}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setAccountSwitcherOpen(true)}
+            className={`flex items-center rounded-xl transition-all duration-300 minimal-surface feature-chip ${
+              isExpanded ? "w-full px-3 py-2 justify-start" : "w-10 h-10 justify-center"
+            }`}
+            style={{ color: "var(--m-primary)" }}
+            title={!isExpanded ? "Switch Account" : undefined}
+          >
+            <ArrowRightLeft size={14} className="shrink-0" />
+            <span
+              className={`text-xs font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${
+                isExpanded ? "max-w-[120px] opacity-100 ml-2" : "max-w-0 opacity-0 ml-0"
+              }`}
+            >
+              Switch account
+            </span>
+          </button>
+
+          <button onClick={() => setShowSignOutConfirm(true)} className={`flex items-center rounded-xl transition-all duration-300 minimal-surface feature-chip ${isExpanded ? "w-full px-3 py-2 justify-center" : "w-10 h-10 justify-center"}`} style={{ color: "var(--m-danger)" }} title={!isExpanded ? "Sign Out" : undefined}>
+            <LogOut size={14} className="shrink-0" />
+            <span className={`text-xs font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isExpanded ? "max-w-[100px] opacity-100 ml-2" : "max-w-0 opacity-0 ml-0"}`}>Sign out</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Mobile overlay */}
+      {mobileOpen && (
+        <button className="fixed inset-0 z-20 bg-black/60 lg:hidden transition-opacity" onClick={() => setMobileOpen(false)} aria-label="Close menu" />
+      )}
+
+      {/* ─── Main Content ─── */}
+      <section className="transition-all duration-300 w-full min-w-0 max-w-full overflow-x-hidden lg:pl-[76px]">
+        {/* Top Bar */}
+        <header className="sticky top-0 z-20 flex items-center justify-between px-3 sm:px-6 py-2.5 sm:py-3.5 md:px-8 minimal-surface shadow-xs gap-2 sm:gap-4 max-w-full min-w-0" style={{ backgroundColor: "var(--m-surface-solid)", borderBottom: "1px solid var(--m-border-light)" }}>
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            <button className="lg:hidden p-2 rounded-xl hover:opacity-80 transition minimal-surface size-9 sm:min-h-[38px] sm:min-w-[38px] flex items-center justify-center shrink-0" onClick={() => setMobileOpen(true)} aria-label="Open menu">
+              <Menu size={18} />
+            </button>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs sm:text-sm font-semibold truncate" style={{ color: "var(--m-text-heading)" }}>
+                {new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+              </p>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <p className="text-[10px] sm:text-xs truncate" style={{ color: "var(--m-text-muted)" }}>
+                  {dayGreeting}, {userNameDisplay}
+                </p>
+                <OfflineSyncIndicator onSync={handleForceSync} isSaving={isSaving} />
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+            {/* ─── Global Command Palette Trigger ─── */}
+            <button
+              onClick={() => setCommandPaletteOpen(true)}
+              className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium transition cursor-pointer border hover:border-black/20 dark:hover:border-white/20 minimal-surface shadow-xs"
+              style={{ color: "var(--m-text-muted)" }}
+              title="Global Command Palette (Cmd + K)"
+            >
+              <Search size={14} className="opacity-70" />
+              <span>Search or command...</span>
+              <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 border border-black/10 dark:border-white/10 opacity-75">
+                ⌘K
+              </kbd>
+            </button>
+            <button
+              onClick={() => setCommandPaletteOpen(true)}
+              className="flex md:hidden p-2 rounded-xl transition hover:opacity-80 minimal-surface size-9 sm:min-h-[38px] sm:min-w-[38px] items-center justify-center cursor-pointer shrink-0"
+              title="Search & Commands"
+              aria-label="Search"
+            >
+              <Search size={16} />
+            </button>
+
+            {/* Desktop / Tablet Icons: Friends, Messages, Inbox, Theme */}
+            <button onClick={() => setFriendsModalOpen(true)} className="hidden sm:flex p-2 rounded-xl transition hover:opacity-80 minimal-surface min-h-[38px] min-w-[38px] items-center justify-center shrink-0 cursor-pointer" title="Friends">
+              <Users size={17} />
+            </button>
+
+            <button onClick={() => { setChatModalOpen(true); checkInbox(); }} className="hidden sm:flex relative p-2 rounded-xl transition hover:opacity-80 minimal-surface min-h-[38px] min-w-[38px] items-center justify-center shrink-0 cursor-pointer" title="Messages">
+              <MessageCircle size={16} />
+              {unreadMessageCount > 0 && (
+                <span className="absolute top-1 right-1 flex h-3 w-3 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white shadow-sm ring-2 ring-[var(--m-header-bg)]">
+                  {unreadMessageCount > 9 ? "9+" : unreadMessageCount}
+                </span>
+              )}
+            </button>
+
+            <button onClick={() => setInboxOpen(true)} className="hidden sm:flex relative p-2 rounded-xl transition hover:opacity-80 minimal-surface min-h-[38px] min-w-[38px] items-center justify-center shrink-0 cursor-pointer" title="Inbox">
+              <Bell size={16} />
+              {(pendingShares.length + pendingFriendRequests.length) > 0 && (
+                <span className="absolute top-1 right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white">
+                  {pendingShares.length + pendingFriendRequests.length}
+                </span>
+              )}
+            </button>
+
+            {/* Theme Selector (Desktop / Tablet only — hidden on mobile as requested) */}
+            <button onClick={() => setThemeSelectorOpen(true)} className="hidden sm:flex p-2 rounded-xl transition hover:opacity-80 minimal-surface min-h-[38px] min-w-[38px] items-center justify-center shrink-0 cursor-pointer" title="Change theme">
+              <Palette size={16} />
+            </button>
+
+            {/* Mobile Three-Dots Action Menu (Smartphone viewpoint) */}
+            <div className="relative sm:hidden">
+              <button
+                type="button"
+                onClick={() => setMobileActionsOpen((v) => !v)}
+                className="relative p-2 rounded-xl transition hover:opacity-80 minimal-surface size-9 flex items-center justify-center shrink-0 cursor-pointer"
+                title="More options"
+                aria-label="More options"
+              >
+                <MoreVertical size={17} />
+                {(unreadMessageCount > 0 || (pendingShares.length + pendingFriendRequests.length) > 0) && (
+                  <span className="absolute top-1 right-1 flex size-2 rounded-full bg-red-500 ring-2 ring-[var(--m-header-bg)]" />
+                )}
+              </button>
+
+              {mobileActionsOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setMobileActionsOpen(false)}
+                  />
+                  <div
+                    className="absolute right-0 top-full mt-2 z-50 min-w-[210px] rounded-2xl p-1.5 shadow-2xl border animate-in fade-in zoom-in-95 duration-150 backdrop-blur-md"
+                    style={{
+                      backgroundColor: "var(--m-surface-solid)",
+                      borderColor: "var(--m-border)",
+                    }}
+                  >
+                    {/* Chatbox / Messages */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChatModalOpen(true);
+                        checkInbox();
+                        setMobileActionsOpen(false);
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
+                      style={{ color: "var(--m-text)" }}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <MessageCircle size={16} style={{ color: "var(--m-primary)" }} />
+                        <span>Chatbox</span>
+                      </div>
+                      {unreadMessageCount > 0 && (
+                        <span className="flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white">
+                          {unreadMessageCount > 9 ? "9+" : unreadMessageCount}
+                        </span>
+                      )}
+                    </button>
+
+                    {/* Friends */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFriendsModalOpen(true);
+                        setMobileActionsOpen(false);
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
+                      style={{ color: "var(--m-text)" }}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Users size={16} style={{ color: "var(--m-primary)" }} />
+                        <span>Friends</span>
+                      </div>
+                      {pendingFriendRequests.length > 0 && (
+                        <span className="flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white">
+                          {pendingFriendRequests.length}
+                        </span>
+                      )}
+                    </button>
+
+                    {/* Inbox & Notifications */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInboxOpen(true);
+                        setMobileActionsOpen(false);
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
+                      style={{ color: "var(--m-text)" }}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Bell size={16} style={{ color: "var(--m-primary)" }} />
+                        <span>Inbox Notifications</span>
+                      </div>
+                      {(pendingShares.length + pendingFriendRequests.length) > 0 && (
+                        <span className="flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white">
+                          {pendingShares.length + pendingFriendRequests.length}
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+
+          </div>
+        </header>
+
+        <div className="w-full min-w-0 max-w-full px-3 sm:px-6 md:px-8 pb-28 lg:pb-10 pt-3 sm:pt-6">
+
+          {/* ═══ Welcome Onboarding ═══ */}
+          {showOnboarding && (
+            <div className="mb-8 rounded-2xl p-5 minimal-surface feature-zoom" style={{ borderColor: "var(--m-primary)", borderWidth: "1px" }}>
+              <div className="flex items-start justify-between">
+                <div>
+                  <h2 className="font-[Roboto_Slab] text-xl font-semibold" style={{ color: "var(--m-text-heading)" }}>Welcome, {userNameDisplay}</h2>
+                  <p className="mt-2 text-sm leading-6" style={{ color: "var(--m-text-sub)" }}>
+                    Your workspace is fresh. Create a project, add tasks, or chat with the AI tutor to get started.
+                  </p>
+                </div>
+                <button onClick={() => setShowOnboarding(false)} className="p-1 rounded-lg hover:opacity-75 shrink-0">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ═══════════ FINANCE VIEW ═══════════ */}
+          {activeNav === "Money" && (
+            <Suspense fallback={<div className="flex h-full items-center justify-center p-8"><Loader2 className="animate-spin text-white/50" size={32} /></div>}>
+              <FinanceApp 
+                financeData={finance} 
+                onUpdateFinance={(newData) => setFinance(newData)} 
+              />
+            </Suspense>
+          )}
+
+          {/* ═══════════ CBSE EXAMS & MOCK TESTS VIEW ═══════════ */}
+          {activeNav === "Exams" && (
+            <Suspense fallback={<div className="flex h-full items-center justify-center p-8"><Loader2 className="animate-spin text-white/50" size={32} /></div>}>
+              <ExamSimulatorApp
+                userSubjects={subjects}
+                userNotes={notes}
+                onAddGrade={(assignmentName, score, total, subjectName) => {
+                  const matchedSub = subjects.find(s => s.name.toLowerCase() === subjectName.toLowerCase()) || subjects[0];
+                  if (matchedSub) {
+                    const newG = {
+                      id: crypto.randomUUID(),
+                      subjectId: matchedSub.id,
+                      assignmentName,
+                      score,
+                      total,
+                      weight: 100,
+                      createdAt: new Date().toISOString(),
+                    };
+                    setGrades([...grades, newG as any]);
+                  }
+                }}
+                onAddFlashcard={(front, back, course) => {
+                  const matchedSub = subjects.find(s => s.name.toLowerCase() === course.toLowerCase()) || subjects[0];
+                  if (matchedSub) {
+                    const newFc = {
+                      id: crypto.randomUUID(),
+                      subjectId: matchedSub.id,
+                      front,
+                      back,
+                      difficulty: "medium" as const,
+                      reviewCount: 0,
+                      createdAt: new Date().toISOString(),
+                    };
+                    setFlashcards([...flashcards, newFc as any]);
+                  }
+                }}
+                onAddXP={(amt) => addXP(amt)}
+                onExplainResultsWithAI={(analysisPrompt) => {
+                  setIsChatMaximized(true);
+                  askCoach(undefined, analysisPrompt);
+                }}
+                showToast={showToast}
+              />
+            </Suspense>
+          )}
+
+          {/* ═══════════ TODAY VIEW ═══════════ */}
+          {activeNav === "Today" && (
+            <div className="grid gap-5 sm:gap-7 xl:grid-cols-[1fr_380px] items-start w-full min-w-0 max-w-full">
+              <div className="w-full min-w-0 max-w-full">
+                {/* Greeting */}
+                <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+                  <div>
+                    <h1 className="font-[Roboto_Slab] text-2xl font-semibold leading-tight md:text-3xl" style={{ color: "var(--m-text-heading)" }}>
+                      Today
+                    </h1>
+                    <p className="mt-1 text-sm" style={{ color: "var(--m-text-muted)" }}>
+                      {completeCount} of {tasks.length} tasks done
+                    </p>
+                  </div>
+                  <button onClick={() => document.getElementById("new-task-input")?.focus()} className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition hover:opacity-90" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                    <Plus size={16} /><span>New Task</span>
+                  </button>
+                </div>
+
+                {/* Deadline Countdown Widget */}
+                {upcomingDeadlines.length > 0 && (
+                  <section className="mb-5 rounded-xl p-3.5 sm:p-4 minimal-surface feature-zoom w-full min-w-0 max-w-full overflow-hidden">
+                    <div className="flex items-center gap-2 mb-3">
+                      <AlarmClock size={15} style={{ color: "var(--m-danger)" }} />
+                      <p className="text-xs font-medium" style={{ color: "var(--m-text-muted)" }}>Upcoming deadlines</p>
+                    </div>
+                    <div
+                      onWheel={(e) => {
+                        if (e.deltaY !== 0 && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                          e.currentTarget.scrollLeft += e.deltaY;
+                        }
+                      }}
+                      className="flex gap-3 overflow-x-auto pb-1.5 no-scrollbar select-none cursor-grab active:cursor-grabbing w-full min-w-0"
+                      style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-x pan-y" }}
+                    >
+                      {upcomingDeadlines.map((t) => (
+                        <div key={t.id} className="shrink-0 rounded-xl px-3 py-2 text-xs feature-chip" style={{ border: `1px solid ${deadlineColor(t.daysLeft)}30`, backgroundColor: `${deadlineColor(t.daysLeft)}10` }}>
+                          <p className="font-bold truncate max-w-[140px]" style={{ color: "var(--m-text-heading)" }}>{t.title}</p>
+                          <p className="font-[DM_Mono] text-[11px] font-bold mt-0.5" style={{ color: deadlineColor(t.daysLeft) }}>
+                            {t.daysLeft < 0 ? `${Math.abs(t.daysLeft)}d overdue!` : t.daysLeft === 0 ? "Due today!" : `${t.daysLeft}d left`}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {/* Subject Filter */}
+                <section className="mb-5 rounded-xl p-3.5 sm:p-4 minimal-inset feature-zoom w-full min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0">
+                      <p className="text-xs font-semibold truncate" style={{ color: "var(--m-text-muted)" }}>Filter by project</p>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => scrollSubjectFilter("left")}
+                          className="p-1 rounded-lg border transition hover:opacity-80 active:scale-90 cursor-pointer shadow-2xs"
+                          style={{
+                            backgroundColor: "var(--m-surface)",
+                            borderColor: "var(--m-border)",
+                            color: "var(--m-text-sub)",
+                          }}
+                          aria-label="Scroll left"
+                          title="Scroll left"
+                        >
+                          <ChevronLeft size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scrollSubjectFilter("right")}
+                          className="p-1 rounded-lg border transition hover:opacity-80 active:scale-90 cursor-pointer shadow-2xs"
+                          style={{
+                            backgroundColor: "var(--m-surface)",
+                            borderColor: "var(--m-border)",
+                            color: "var(--m-text-sub)",
+                          }}
+                          aria-label="Scroll right"
+                          title="Scroll right"
+                        >
+                          <ChevronRight size={13} />
+                        </button>
+                      </div>
+                    </div>
+                    <button onClick={() => setSubjectsOpen(true)} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 sm:px-3 sm:py-1.5 text-xs font-bold shrink-0 transition hover:scale-105 cursor-pointer shadow-xs" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)", color: "var(--m-primary)" }}>
+                      <FolderPlus size={13} /><span className="text-[11px] sm:text-xs">Manage</span>
+                    </button>
+                  </div>
+                  <div
+                    ref={subjectFilterScrollRef}
+                    onWheel={(e) => {
+                      if (e.deltaY !== 0 && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                        e.currentTarget.scrollLeft += e.deltaY;
+                      }
+                    }}
+                    onMouseDown={(e) => {
+                      const el = e.currentTarget;
+                      el.dataset.down = "true";
+                      el.dataset.startX = String(e.pageX - el.offsetLeft);
+                      el.dataset.scrollLeft = String(el.scrollLeft);
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.dataset.down = "false";
+                    }}
+                    onMouseUp={(e) => {
+                      e.currentTarget.dataset.down = "false";
+                    }}
+                    onMouseMove={(e) => {
+                      const el = e.currentTarget;
+                      if (el.dataset.down !== "true") return;
+                      e.preventDefault();
+                      const x = e.pageX - el.offsetLeft;
+                      const walk = (x - Number(el.dataset.startX || 0)) * 1.5;
+                      el.scrollLeft = Number(el.dataset.scrollLeft || 0) - walk;
+                    }}
+                    className="mt-3 flex gap-2 overflow-x-auto pb-1.5 no-scrollbar select-none cursor-grab active:cursor-grabbing w-full min-w-0"
+                    style={{
+                      WebkitOverflowScrolling: "touch",
+                      touchAction: "pan-x pan-y",
+                    }}
+                  >
+                    <button onClick={() => setSelectedSubject("All subjects")} className="shrink-0 rounded-xl px-3.5 py-2 text-xs font-semibold transition hover:scale-105 active:scale-95 feature-chip cursor-pointer" style={selectedSubject === "All subjects" ? { backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" } : { backgroundColor: "var(--m-surface)", color: "var(--m-text)", border: "1px solid var(--m-border)" }}>
+                      All ({tasks.length})
+                    </button>
+                    {subjects.map((s) => {
+                      const count = openTaskCountByCourse.get(s.name) || 0;
+                      return (
+                        <button key={s.id} onClick={() => { setSelectedSubject(s.name); setTaskCourse(s.name); }} className="shrink-0 rounded-xl px-3.5 py-2 text-xs font-semibold transition hover:scale-105 active:scale-95 feature-chip cursor-pointer" style={selectedSubject === s.name ? { backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" } : { backgroundColor: "var(--m-surface)", color: "var(--m-text)", border: "1px solid var(--m-border)" }}>
+                          <span className="mr-2 inline-block size-2.5 rounded-full" style={{ backgroundColor: s.color }} />
+                          {s.name} {count > 0 && <span className="opacity-75">({count})</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* Progress & Timer */}
+                <div className="grid gap-4 sm:gap-5 md:grid-cols-[1.3fr_1fr] w-full min-w-0 max-w-full">
+                  <section className="overflow-hidden rounded-xl p-4 sm:p-5 minimal-surface feature-zoom w-full min-w-0 max-w-full">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-xs font-medium" style={{ color: "var(--m-text-muted)" }}>Progress</p>
+                        <h2 className="mt-0.5 text-base sm:text-lg font-semibold" style={{ color: "var(--m-text-heading)" }}>{completeCount} of {tasks.length} done</h2>
+                      </div>
+                      <span className="rounded-lg px-2.5 py-0.5 text-xs font-medium minimal-inset" style={{ color: "var(--m-primary)" }}>{progress}%</span>
+                    </div>
+                    <div className="mt-4 sm:mt-5 flex items-center gap-2">
+                      <div className="h-3 flex-1 overflow-hidden rounded-full" style={{ backgroundColor: "var(--m-surface-alt)" }}>
+                        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${progress}%`, backgroundColor: "var(--m-primary)" }} />
+                      </div>
+                    </div>
+                    {/* Weekly bars */}
+                    <div className="mt-5 sm:mt-6">
+                      <div className="flex items-center justify-between text-[11px] mb-2" style={{ color: "var(--m-text-muted)" }}>
+                        <span>This week</span>
+                        <span style={{ color: "var(--m-primary)" }}>{formatStudyTime(weeklyStudyMinutes)} total</span>
+                      </div>
+                      <div className="grid grid-cols-7 gap-1 sm:gap-2 items-end h-14 rounded-xl p-1.5 sm:p-2 w-full min-w-0 max-w-full" style={{ backgroundColor: "var(--m-surface-hover)", border: "1px solid var(--m-border-light)" }}>
+                        {graphData.map((d) => {
+                          const heightPct = graphMaxMinutes > 0 ? Math.min(100, Math.max(15, (d.effectiveMinutes / graphMaxMinutes) * 100)) : 15;
+                          return (
+                            <div key={d.dateKey} className="flex flex-col items-center gap-1 h-full justify-end min-w-0" title={`${d.label}: ${d.minutes} mins`}>
+                              <div
+                                className={`w-full rounded-md transition-all duration-300 ${d.isTimerActive ? "animate-pulse ring-1 ring-[var(--m-primary)]" : ""}`}
+                                style={{
+                                  height: `${heightPct}%`,
+                                  backgroundColor: d.isToday ? "var(--m-primary)" : d.minutes > 0 ? "var(--m-accent)" : "var(--m-border)",
+                                  boxShadow: d.isTimerActive ? "0 0 10px var(--m-primary)" : undefined,
+                                }}
+                              />
+                              <span className={`text-[8px] sm:text-[9px] font-[DM_Mono] truncate ${d.isToday ? "font-bold" : ""}`} style={{ color: d.isToday ? "var(--m-primary)" : "var(--m-text-sub)" }}>{d.label.split(" ")[0]}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Pomodoro Widget */}
+                  <section className="rounded-xl p-4 sm:p-5 minimal-surface feature-zoom w-full min-w-0 max-w-full overflow-hidden" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)", borderColor: "transparent" }}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-[10px] font-medium uppercase tracking-wider opacity-70">
+                          {isBreak ? "Break" : "Focus"}
+                        </p>
+                        <h2 className="mt-1 text-base sm:text-lg font-semibold">
+                          {isBreak ? "Take a break." : "Stay focused."}
+                        </h2>
+                      </div>
+                      <div className="text-right text-[10px] opacity-70">
+                        <p>Session {pomodoroSession + 1}</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex items-center gap-3 sm:gap-5 w-full min-w-0 max-w-full">
+                      <div className="relative grid size-20 sm:size-24 place-items-center shrink-0">
+                        <svg className="size-20 sm:size-24 -rotate-90" viewBox="0 0 120 120">
+                          <circle cx="60" cy="60" r="50" fill="none" stroke="color-mix(in srgb, var(--m-primary-text) 25%, transparent)" strokeWidth="7" />
+                          <circle cx="60" cy="60" r="50" fill="none" stroke="var(--m-accent)" strokeWidth="7" strokeLinecap="round" strokeDasharray="314" strokeDashoffset={circleDash} className="transition-all duration-300" />
+                        </svg>
+                        <span className="absolute font-[DM_Mono] text-sm sm:text-base font-bold">{formatTime(seconds)}</span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium transition-colors duration-300 truncate" style={{ color: "color-mix(in srgb, var(--m-primary-text) 90%, transparent)" }}>
+                          {isBreak ? "Break" : `${timerPreset}min Focus`}
+                        </p>
+                        <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+                          <button onClick={() => setIsRunning((r) => !r)} className="inline-flex items-center gap-1.5 rounded-full px-3.5 sm:px-4 py-1.5 sm:py-2 text-xs font-bold transition hover:scale-105 shadow-sm shrink-0" style={{ backgroundColor: "var(--m-accent)", color: "var(--m-accent-text)" }}>
+                            {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                            <span>{isRunning ? "Pause" : "Start"}</span>
+                          </button>
+                          <button onClick={handleResetTimer} className="p-1.5 sm:p-2 rounded-full transition-colors duration-200 hover:opacity-100 shrink-0" style={{ color: "color-mix(in srgb, var(--m-primary-text) 80%, transparent)" }} title="Reset">
+                            <RotateCcw size={14} />
+                          </button>
+                        </div>
+                        <div className="mt-2 flex gap-1 text-[10px]">
+                          {[15, 25, 45].map((m) => (
+                            <button key={m} onClick={() => changeTimerPreset(m)} className="px-2 py-0.5 rounded transition-all duration-200 feature-chip" style={timerPreset === m ? { backgroundColor: "var(--m-accent)", color: "var(--m-accent-text)", fontWeight: "bold" } : { backgroundColor: "color-mix(in srgb, var(--m-primary-text) 15%, transparent)", color: "var(--m-primary-text)", opacity: 0.85 }}>{m}m</button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+
+                {/* Tasks List */}
+                <section className="mt-7 w-full min-w-0 max-w-full">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <h2 className="text-lg font-semibold" style={{ color: "var(--m-text-heading)" }}>Tasks</h2>
+                    <div className="flex rounded-xl p-1 text-xs font-semibold" style={{ backgroundColor: "var(--m-surface-alt)" }}>
+                      {(["all", "active", "completed"] as const).map((st) => (
+                        <button key={st} onClick={() => setTaskFilterStatus(st)} className={`rounded-lg px-3 py-1 capitalize transition feature-chip`} style={taskFilterStatus === st ? { backgroundColor: "var(--m-surface)", color: "var(--m-primary)", fontWeight: 700, boxShadow: "0 1px 2px rgba(0,0,0,0.05)" } : { color: "var(--m-text-sub)" }}>
+                          {st}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl minimal-surface feature-zoom w-full min-w-0 max-w-full">
+                    <div className="divide-y w-full min-w-0" style={{ borderColor: "var(--m-border-light)" }}>
+                      {filteredTasks.length ? (
+                        filteredTasks.map((task) => (
+                          <div key={task.id} className={`group flex items-center gap-2.5 sm:gap-3.5 px-3.5 sm:px-5 py-3 sm:py-3.5 transition duration-200 hover:opacity-90 contain-task w-full min-w-0 max-w-full ${task.done ? "opacity-60" : ""}`}>
+                            <button onClick={() => toggleTask(task.id)} className="grid size-5 shrink-0 place-items-center rounded-full border transition" style={task.done ? { borderColor: "var(--m-primary)", backgroundColor: "var(--m-primary)", color: "white" } : { borderColor: "var(--m-border)", backgroundColor: "var(--m-surface)" }}>
+                              {task.done && <Check size={13} strokeWidth={3} />}
+                            </button>
+                            <div className="min-w-0 flex-1 overflow-hidden">
+                              <p className={`text-sm font-medium truncate ${task.done ? "line-through" : ""}`} style={{ color: task.done ? "var(--m-text-muted)" : "var(--m-text)" }}>{task.title}</p>
+                              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs" style={{ color: "var(--m-text-sub)" }}>
+                                <span className="font-semibold truncate max-w-[110px] sm:max-w-none">{task.course}</span>
+                                <span>•</span>
+                                <span className="font-[DM_Mono] text-[10px] shrink-0">{task.time}</span>
+                                {task.priority && (
+                                  <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase shrink-0 ${task.priority === "high" ? "bg-[#fff0e9] text-[#9a463f]" : task.priority === "medium" ? "bg-[#fff3d8] text-[#8a6523]" : "bg-[#eef4ec] text-[#35523e]"}`}>{task.priority}</span>
+                                )}
+                                {task.deadline && (
+                                  <span className="font-[DM_Mono] text-[10px] font-bold shrink-0" style={{ color: deadlineColor(daysUntil(task.deadline)) }}>
+                                    {daysUntil(task.deadline) <= 0 ? "⚠️ Due!" : `📅 ${daysUntil(task.deadline)}d`}
+                                  </span>
+                                )}
+                                {task.createdBy === "agent" && (
+                                  <span className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase shrink-0" style={{ backgroundColor: "var(--m-primary-transparent)", color: "var(--m-primary)", border: "1px solid var(--m-primary)" }}>
+                                    <Sparkles size={9} /> Autopilot
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => openNoteForTask(task.course, task.title)}
+                              className="opacity-80 hover:opacity-100 flex items-center gap-1 rounded-full px-2 sm:px-2.5 py-1 text-[10px] font-semibold transition hover:scale-105 shrink-0 cursor-pointer"
+                              style={{
+                                backgroundColor: "var(--m-surface-alt)",
+                                color: "var(--m-primary)",
+                                border: "1px solid var(--m-border-light)",
+                              }}
+                              title="Open or create linked study note"
+                            >
+                              <FileText size={11} />
+                              <span className="hidden sm:inline">Note</span>
+                            </button>
+                            <button onClick={() => deleteTask(task.id)} className="opacity-70 sm:opacity-0 group-hover:opacity-100 p-1 rounded-lg transition shrink-0" style={{ color: "var(--m-danger)" }} title="Delete"><Trash2 size={16} /></button>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="px-5 py-10 text-center">
+                          <div className="mx-auto grid size-12 place-items-center rounded-2xl" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-primary)" }}>
+                            <CheckCircle2 size={22} />
+                          </div>
+                          <p className="mt-3 font-[Roboto_Slab] text-lg font-semibold" style={{ color: "var(--m-text-heading)" }}>No tasks here yet.</p>
+                          <p className="mt-1 text-xs" style={{ color: "var(--m-text-sub)" }}>Add your first task below to get started!</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Add Task Form */}
+                    <form onSubmit={addTask} className="flex flex-col sm:grid gap-2.5 sm:gap-2 px-3 sm:px-4 py-3.5 sm:grid-cols-[1fr_140px_100px_100px_auto] w-full min-w-0 max-w-full" style={{ borderTop: "1px solid var(--m-border-light)", backgroundColor: "var(--m-surface-hover)" }}>
+                      <input id="new-task-input" value={taskDraft} onChange={(e) => setTaskDraft(e.target.value)} placeholder="What needs to get done?" className="w-full min-w-0 rounded-xl border px-3.5 py-2 text-sm outline-none transition focus:ring-2" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)", "--tw-ring-color": "var(--m-primary)" } as any} />
+                      <div className="flex items-center gap-1 min-w-0">
+                        <select
+                          value={taskCourse}
+                          onChange={(e) => {
+                            if (e.target.value === "__ADD_NEW__") {
+                              setSubjectsOpen(true);
+                            } else {
+                              setTaskCourse(e.target.value);
+                            }
+                          }}
+                          className="w-full min-w-0 rounded-xl border px-2.5 py-2 text-xs font-medium outline-none cursor-pointer truncate"
+                          style={{
+                            borderColor: "var(--m-border)",
+                            backgroundColor: "var(--m-input-bg)",
+                            color: "var(--m-text)",
+                          }}
+                        >
+                          <option value="">{selectedSubject === "All subjects" ? "Subject (Select)" : selectedSubject}</option>
+                          {subjects.map((sub) => (
+                            <option key={sub.id} value={sub.name}>
+                              {sub.name}
+                            </option>
+                          ))}
+                          <option value="__ADD_NEW__" className="font-bold">
+                            ➕ Add Subject...
+                          </option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => setSubjectsOpen(true)}
+                          className="rounded-lg p-2 text-xs font-bold transition hover:opacity-80 shrink-0"
+                          style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-primary)", border: "1px solid var(--m-border-light)" }}
+                          title="Add New Subject"
+                        >
+                          <Plus size={14} />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 sm:contents gap-2">
+                        <input type="date" value={taskDeadline} onChange={(e) => setTaskDeadline(e.target.value)} className="w-full min-w-0 rounded-xl border px-2 py-2 text-xs outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} title="Deadline" />
+                        <select value={taskPriority} onChange={(e) => setTaskPriority(e.target.value as any)} className="w-full min-w-0 rounded-xl border px-2 py-2 text-xs outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }}>
+                          <option value="low">Low Priority</option>
+                          <option value="medium">Medium Priority</option>
+                          <option value="high">High Priority</option>
+                        </select>
+                      </div>
+                      <button type="submit" disabled={!taskDraft.trim()} className="w-full sm:w-auto rounded-xl px-4 py-2.5 sm:py-2 text-xs font-bold transition hover:scale-105 disabled:opacity-40" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>Add Task</button>
+                    </form>
+                  </div>
+                </section>
+
+                {/* Autopilot Widget */}
+                <section id="autopilot-section" className="mt-5 rounded-xl p-4 sm:p-5 minimal-surface feature-zoom w-full min-w-0 max-w-full overflow-hidden" style={{ border: "1px solid var(--m-primary-transparent)" }}>
+                  <div className="flex flex-wrap items-start sm:items-center justify-between gap-2.5 mb-2">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <div className="grid size-7 place-items-center rounded-lg shadow-2xs shrink-0" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                        <Sparkles size={16} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="font-[Roboto_Slab] text-sm sm:text-base font-semibold truncate" style={{ color: "var(--m-text-heading)" }}>Autopilot Taskmaster</h3>
+                        <p className="text-[10px] sm:text-[11px] truncate" style={{ color: "var(--m-text-sub)" }}>Autonomous AI OS for syllabus scheduling, tasks & academic actions</p>
+                      </div>
+                    </div>
+                    <span className="flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold shrink-0" style={{ backgroundColor: "var(--m-surface-alt)", border: "1px solid var(--m-border)", color: "var(--m-primary)" }}>
+                      <Zap size={11} /> <span className="sm:hidden">NVIDIA AI</span><span className="hidden sm:inline">Spaced-Repetition Engine + NVIDIA AI</span>
+                    </span>
+                  </div>
+
+                  {/* Mode Switcher: Quick Actions vs Syllabus & Exam Mode */}
+                  <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl border my-3 w-full sm:w-fit" style={{ backgroundColor: "var(--m-surface-alt)", borderColor: "var(--m-border-light)" }}>
+                    <button
+                      type="button"
+                      onClick={() => setAutopilotMode("quick")}
+                      className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                        autopilotMode === "quick" ? "shadow-xs" : "opacity-70 hover:opacity-100"
+                      }`}
+                      style={
+                        autopilotMode === "quick"
+                          ? { backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }
+                          : { color: "var(--m-text)" }
+                      }
+                    >
+                      <Zap size={13} />
+                      <span>Quick Commands</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAutopilotMode("syllabus")}
+                      className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                        autopilotMode === "syllabus" ? "shadow-xs" : "opacity-70 hover:opacity-100"
+                      }`}
+                      style={
+                        autopilotMode === "syllabus"
+                          ? { backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }
+                          : { color: "var(--m-text)" }
+                      }
+                    >
+                      <Calendar size={13} />
+                      <span>Syllabus & Exam</span>
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/30">AI</span>
+                    </button>
+                  </div>
+
+                  {/* ─── Mode 1: Syllabus & Exam Countdown Planner ─── */}
+                  {autopilotMode === "syllabus" ? (
+                    <form onSubmit={handleAutopilotSubmit} className="mb-6 space-y-4">
+                      {/* Row 1: Exam Name, Date, Countdown badge, Daily Hours */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-bold mb-1" style={{ color: "var(--m-text-heading)" }}>
+                            Exam / Goal Name
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={syllabusExamName}
+                            onChange={(e) => setSyllabusExamName(e.target.value)}
+                            placeholder="e.g. CBSE Class 12 Boards"
+                            className="w-full rounded-xl border px-3 py-2 text-xs outline-none bg-transparent"
+                            style={{ borderColor: "var(--m-border-light)", color: "var(--m-text)" }}
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-[11px] font-bold" style={{ color: "var(--m-text-heading)" }}>
+                              Exam Date
+                            </label>
+                            {(() => {
+                              const diff = Math.ceil((new Date(syllabusExamDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+                              return (
+                                <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${diff > 0 ? "bg-amber-500/20 text-amber-300" : "bg-red-500/20 text-red-400"}`}>
+                                  {diff > 0 ? `⏳ ${diff}d left` : "Target Today"}
+                                </span>
+                              );
+                            })()}
+                          </div>
+                          <input
+                            type="date"
+                            required
+                            value={syllabusExamDate}
+                            onChange={(e) => setSyllabusExamDate(e.target.value)}
+                            className="w-full rounded-xl border px-3 py-2 text-xs outline-none bg-transparent"
+                            style={{ borderColor: "var(--m-border-light)", color: "var(--m-text)" }}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold mb-1" style={{ color: "var(--m-text-heading)" }}>
+                            Daily Study Target
+                          </label>
+                          <div className="flex items-center gap-1.5">
+                            {[2, 3, 4, 6].map((hrs) => (
+                              <button
+                                key={hrs}
+                                type="button"
+                                onClick={() => setSyllabusDailyHours(hrs)}
+                                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                                  syllabusDailyHours === hrs
+                                    ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/40"
+                                    : "bg-black/5 dark:bg-white/5 opacity-70 border-transparent hover:opacity-100"
+                                }`}
+                              >
+                                {hrs}h
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Row 2: Syllabus Input & File Upload */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-bold" style={{ color: "var(--m-text-heading)" }}>
+                            Syllabus & Topic Outline (Paste or Upload PDF)
+                          </label>
+                          <div className="flex items-center gap-2 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSyllabusExamName("CBSE Class 12 Boards");
+                                setSyllabusText(`Physics:
+1. Electrostatics: Electric Charges and Fields, Electrostatic Potential and Capacitance
+2. Current Electricity: Ohm's Law, Kirchhoff's Rules
+3. Optics: Ray Optics and Optical Instruments, Wave Optics
+4. Modern Physics: Dual Nature of Radiation, Atoms and Nuclei
+
+Chemistry:
+1. Solutions: Colligative Properties, Raoult's Law
+2. Electrochemistry: Nernst Equation, Kohlrausch Law
+3. Organic Chemistry: Haloalkanes, Alcohols, Aldehydes and Ketones
+
+Mathematics:
+1. Calculus: Continuity and Differentiability, Applications of Derivatives, Integrals
+2. Vectors and 3D Geometry
+3. Linear Programming and Probability`);
+                              }}
+                              className="opacity-70 hover:opacity-100 hover:underline cursor-pointer text-indigo-400"
+                            >
+                              Load CBSE Sample
+                            </button>
+                            <span className="opacity-40">•</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSyllabusExamName("University Calculus Finals");
+                                setSyllabusText(`Calculus & Linear Algebra Syllabus:
+- Limits, Continuity, and Derivative Rules
+- Applications of Derivatives: Optimization, Related Rates, Curve Sketching
+- Integration Techniques: Substitution, Integration by Parts, Partial Fractions
+- Definite Integrals, Areas, and Volumes of Revolution
+- Sequences, Infinite Series, and Taylor Polynomials
+- Matrices, Eigenvalues, and Linear Transformations`);
+                              }}
+                              className="opacity-70 hover:opacity-100 hover:underline cursor-pointer text-indigo-400"
+                            >
+                              Load Calculus Sample
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Drag and Drop / File Picker Area */}
+                        <div className="flex items-center gap-3 p-3 rounded-xl border border-dashed hover:border-indigo-500/50 transition cursor-pointer relative" style={{ borderColor: "var(--m-border-light)", backgroundColor: "var(--m-surface-alt)" }}>
+                          <input
+                            type="file"
+                            accept=".pdf,.txt,.md,.csv"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              setIsExtractingSyllabus(true);
+                              try {
+                                const { extractTextFromFile } = await import("./flashcards/pdfExtractor");
+                                const res = await extractTextFromFile(file);
+                                setSyllabusText(res.text);
+                                setSyllabusFileName(file.name);
+                                showToast(`Extracted ${res.pageCount || 1} pages from "${file.name}"! 📄`);
+                              } catch (err: any) {
+                                showToast(`Failed to parse file: ${err.message}`, "error");
+                              } finally {
+                                setIsExtractingSyllabus(false);
+                              }
+                            }}
+                            className="absolute inset-0 opacity-0 cursor-pointer"
+                          />
+                          <FileText size={20} className="text-indigo-400 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-semibold truncate" style={{ color: "var(--m-text-heading)" }}>
+                              {syllabusFileName ? `Attached: ${syllabusFileName}` : "Click or drop syllabus document (PDF, TXT, MD)"}
+                            </p>
+                            <p className="text-[10px] opacity-60">
+                              {isExtractingSyllabus ? "Extracting syllabus chapters with on-demand parser..." : "Autopilot extracts topics, sub-chapters and weights automatically"}
+                            </p>
+                          </div>
+                          {syllabusFileName && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSyllabusFileName("");
+                                setSyllabusText("");
+                              }}
+                              className="p-1 rounded-md opacity-60 hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10 cursor-pointer"
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                        </div>
+
+                        <textarea
+                          value={syllabusText}
+                          onChange={(e) => setSyllabusText(e.target.value)}
+                          placeholder="Or paste syllabus text, textbook table of contents, or study topics directly..."
+                          className="w-full rounded-xl border p-3 text-xs outline-none resize-y min-h-[90px] transition focus:ring-1 bg-transparent"
+                          style={{ borderColor: "var(--m-border-light)", color: "var(--m-text)" }}
+                        />
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
+                        <p className="text-[10px] opacity-60">
+                          Autopilot applies cognitive spaced-repetition: Theory ➔ Practice ➔ Mock Tests ➔ T-1 Rest Buffer.
+                        </p>
+                        <button
+                          type="submit"
+                          disabled={isSubmittingAutopilot || isExtractingSyllabus || (!syllabusText.trim() && !autopilotText.trim())}
+                          className="w-full sm:w-auto flex items-center justify-center gap-1.5 rounded-xl px-5 py-2.5 text-xs font-bold transition hover:opacity-90 disabled:opacity-50 sm:ml-auto shadow-md cursor-pointer shrink-0"
+                          style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}
+                        >
+                          {isSubmittingAutopilot ? (
+                            <>
+                              <span className="flex gap-1 mr-1">
+                                <span className="size-1.5 animate-bounce rounded-full bg-white" />
+                                <span className="size-1.5 animate-bounce rounded-full bg-white [animation-delay:150ms]" />
+                                <span className="size-1.5 animate-bounce rounded-full bg-white [animation-delay:300ms]" />
+                              </span>
+                              Planning Roadmap...
+                            </>
+                          ) : (
+                            <>
+                              <span>Run Autopilot: Generate Exam Roadmap</span>
+                              <Sparkles size={14} />
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    /* ─── Mode 2: Quick Action Prompt Chips & Textarea ─── */
+                    <>
+                      <div className="my-3">
+                        <p className="text-[10px] font-bold mb-1.5 flex items-center gap-1" style={{ color: "var(--m-text-sub)" }}>
+                          <span>Quick Superpower Actions:</span>
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {[
+                            { label: "📂 New Subject", text: "Create a new subject called Machine Learning" },
+                            { label: "🃏 Bio Flashcards", text: "Create flashcards for Biology: Mitochondria -> Powerhouse of the cell, Ribosome -> Protein synthesis" },
+                            { label: "📊 Math Grade", text: "Add grade for Math: Midterm 95/100 weight 20%" },
+                            { label: "📓 CS Note", text: "Take note for CS: React hooks allow functional components to manage state and side effects" },
+                            { label: "🗓️ Task Schedule", text: "Make a schedule based on my tasks assigned" },
+                            { label: "💰 Add Income", text: "Add income 1,00,000" },
+                          ].map((chip, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => setAutopilotText(chip.text)}
+                              className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-[10px] font-medium transition hover:scale-105 active:scale-95 cursor-pointer"
+                              style={{
+                                backgroundColor: "var(--m-surface-alt)",
+                                border: "1px solid var(--m-border-light)",
+                                color: "var(--m-text-heading)",
+                              }}
+                            >
+                              {chip.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <form onSubmit={handleAutopilotSubmit} className="mb-6">
+                        <textarea 
+                          value={autopilotText}
+                          onChange={(e) => setAutopilotText(e.target.value)}
+                          placeholder="Command for autopilot..."
+                          className="w-full rounded-xl border p-3 text-xs outline-none resize-y min-h-[85px] transition focus:ring-1"
+                          style={{ borderColor: "var(--m-border-light)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }}
+                        />
+                        <div className="flex items-center justify-between mt-2">
+                          <p className="text-[10px] hidden sm:block" style={{ color: "var(--m-text-sub)" }}>
+                            Supports subjects, flashcards, grades, notes, schedule, tasks & finance.
+                          </p>
+                          <button type="submit" disabled={isSubmittingAutopilot || !autopilotText.trim()} className="flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition hover:opacity-90 disabled:opacity-50 ml-auto cursor-pointer" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                            {isSubmittingAutopilot ? (
+                              <><span className="flex gap-1 mr-1"><span className="size-1.5 animate-bounce rounded-full bg-white" /><span className="size-1.5 animate-bounce rounded-full bg-white [animation-delay:150ms]" /><span className="size-1.5 animate-bounce rounded-full bg-white [animation-delay:300ms]" /></span> Processing...</>
+                            ) : (
+                              <>Run Autopilot <Sparkles size={14} /></>
+                            )}
+                          </button>
+                        </div>
+                      </form>
+                    </>
+                  )}
+
+                  <h4 className="text-xs font-bold mb-3" style={{ color: "var(--m-text-heading)" }}>Agent Activity Log</h4>
+                  
+                  {autopilotRuns.length === 0 ? (
+                    <div className="rounded-xl border p-6 text-center" style={{ borderColor: "var(--m-border-light)" }}>
+                      <Bot size={24} className="mx-auto mb-2 opacity-50" style={{ color: "var(--m-text-sub)" }} />
+                      <p className="text-sm font-medium" style={{ color: "var(--m-text-muted)" }}>No agent activity yet.</p>
+                      <p className="text-xs mt-1" style={{ color: "var(--m-text-sub)" }}>Try any of the quick prompts above or type your own request.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {autopilotRuns.map((run) => {
+                        const totalActions =
+                          (run.createdTasks?.length || 0) +
+                          (run.createdSchedule?.length || 0) +
+                          (run.createdSubjects?.length || 0) +
+                          (run.createdFlashcards?.length || 0) +
+                          (run.createdGrades?.length || 0) +
+                          (run.createdNotes?.length || 0) +
+                          (run.createdFinance?.length || 0);
+
+                        return (
+                          <div key={run.id} className="overflow-hidden rounded-xl border shadow-sm transition w-full min-w-0 max-w-full" style={{ borderColor: "var(--m-border-light)" }}>
+                            {/* Run Header */}
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3.5 sm:px-4 py-2.5 w-full min-w-0" style={{ borderColor: "var(--m-border-light)", backgroundColor: "var(--m-surface-alt)" }}>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <div className="grid size-6 place-items-center rounded-md shrink-0" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                                  <Bot size={13} />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-[11px] font-bold truncate" style={{ color: "var(--m-text-heading)" }}>Autopilot Run</p>
+                                  <p className="text-[9px] truncate" style={{ color: "var(--m-text-sub)" }}>{new Date(run.timestamp).toLocaleTimeString()}</p>
+                                </div>
+                              </div>
+                              <span className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold shrink-0 max-w-full truncate" style={{
+                                backgroundColor: "var(--m-surface)",
+                                color: run.status === "done" ? "var(--m-success)" : run.status === "error" ? "var(--m-danger)" : run.status === "pending_approval" ? "#f59e0b" : "var(--m-primary)",
+                                border: "1px solid var(--m-border)",
+                              }}>
+                                {run.status === "done" ? <><CheckCircle2 size={9} /> Complete ({totalActions} actions)</> :
+                                 run.status === "pending_approval" ? <><Sparkles size={9} className="text-amber-500" /> Plan Staged ({run.pendingScheduleItems?.length || 0} blocks, {run.pendingTasks?.length || 0} tasks)</> :
+                                 run.status === "error" ? <><AlertCircle size={9} /> Error</> :
+                                 <><span className="size-1.5 animate-pulse rounded-full" style={{ backgroundColor: "var(--m-primary)" }} /> {run.status === "extracting" ? "Extracting..." : run.status === "planning" ? "Planning..." : "Executing..."}</>
+                                }
+                              </span>
+                            </div>
+
+                            <div className="p-3 space-y-3">
+                              {/* Syllabus & Exam Countdown Staged Card */}
+                              {run.isSyllabusRun && (
+                                <div className="rounded-xl p-3 border mb-1" style={{
+                                  background: "linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(236, 72, 153, 0.08))",
+                                  borderColor: "rgba(99, 102, 241, 0.3)",
+                                }}>
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-600 text-white shadow-xs">
+                                          <CalendarDays size={10} /> T-{run.daysRemaining ?? 30} Days
+                                        </span>
+                                        <h4 className="text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>
+                                          Target: {run.examName}
+                                        </h4>
+                                      </div>
+                                      <p className="text-[10px] mt-0.5" style={{ color: "var(--m-text-sub)" }}>
+                                        Exam Date: <span className="font-semibold" style={{ color: "var(--m-text)" }}>{run.examDate}</span> • Adaptive Spaced-Repetition Study Plan
+                                      </p>
+                                    </div>
+
+                                    {run.status === "pending_approval" && (
+                                      <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleApproveSyllabusRun(run.id)}
+                                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-black text-white shadow-md transition hover:scale-105 active:scale-95 cursor-pointer shrink-0"
+                                          style={{
+                                            background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                                          }}
+                                        >
+                                          <CheckCircle2 size={12} /> Approve & Deploy (+30 XP)
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setAutopilotRuns(prev => prev.filter(r => r.id !== run.id))}
+                                          className="px-2 py-1.5 rounded-lg text-[10px] font-medium border transition hover:bg-red-500/10 hover:border-red-500/30 cursor-pointer shrink-0"
+                                          style={{ borderColor: "var(--m-border)", color: "var(--m-text-sub)" }}
+                                          title="Dismiss plan"
+                                        >
+                                          Dismiss
+                                        </button>
+                                      </div>
+                                    )}
+
+                                    {run.status === "done" && (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold text-emerald-600 bg-emerald-500/10 border border-emerald-500/30">
+                                        <CheckCircle2 size={11} /> Approved & Active in Workspace
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Milestones Roadmaps */}
+                                  {run.roadmapMilestones && run.roadmapMilestones.length > 0 && (
+                                    <div className="mt-3 pt-2.5 border-t border-indigo-500/20">
+                                      <p className="text-[10px] font-bold uppercase tracking-wider mb-2 flex items-center gap-1" style={{ color: "var(--m-text-heading)" }}>
+                                        <Sparkles size={11} className="text-amber-500" /> Spaced-Repetition Countdown Milestones
+                                      </p>
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                        {run.roadmapMilestones.map((m, mIdx) => (
+                                          <div
+                                            key={mIdx}
+                                            className="p-2.5 rounded-lg border text-[9.5px] transition"
+                                            style={{
+                                              backgroundColor: "var(--m-surface)",
+                                              borderColor: "var(--m-border-light)",
+                                            }}
+                                          >
+                                            <div className="flex items-center justify-between gap-1 mb-1">
+                                              <span className="font-extrabold px-1.5 py-0.5 rounded text-[8.5px] bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20">
+                                                {m.countdownTag}
+                                              </span>
+                                              <span className="font-bold px-1.5 py-0.5 rounded text-[8.5px] bg-purple-500/15 text-purple-700 dark:text-purple-300">
+                                                {m.focusSubject}
+                                              </span>
+                                              <span className="text-[8.5px] font-semibold" style={{ color: "var(--m-text-sub)" }}>
+                                                {m.hours} hrs
+                                              </span>
+                                            </div>
+                                            <p className="font-medium leading-relaxed" style={{ color: "var(--m-text)" }}>
+                                              {m.goals}
+                                            </p>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Pending Staged Schedule & Tasks Preview */}
+                                  {run.status === "pending_approval" && (
+                                    <div className="mt-3 pt-2.5 border-t border-indigo-500/20 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                      <div className="p-2 rounded-lg border text-[9px]" style={{ backgroundColor: "var(--m-surface)", borderColor: "var(--m-border-light)" }}>
+                                        <p className="font-bold flex items-center gap-1 text-indigo-600 mb-1">
+                                          <CalendarDays size={10} /> Pending Schedule Sessions ({run.pendingScheduleItems?.length || 0})
+                                        </p>
+                                        <ul className="space-y-1 max-h-24 overflow-y-auto pr-1">
+                                          {run.pendingScheduleItems?.map((s, i) => (
+                                            <li key={i} className="flex justify-between items-center text-[8.5px]" style={{ color: "var(--m-text)" }}>
+                                              <span className="truncate pr-1">• {s.title}</span>
+                                              <span className="shrink-0 text-[8px] font-mono px-1 rounded bg-slate-100 dark:bg-slate-800" style={{ color: "var(--m-text-sub)" }}>{s.time}</span>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                      <div className="p-2 rounded-lg border text-[9px]" style={{ backgroundColor: "var(--m-surface)", borderColor: "var(--m-border-light)" }}>
+                                        <p className="font-bold flex items-center gap-1 text-emerald-600 mb-1">
+                                          <CheckCircle2 size={10} /> Pending Milestone Tasks ({run.pendingTasks?.length || 0})
+                                        </p>
+                                        <ul className="space-y-1 max-h-24 overflow-y-auto pr-1">
+                                          {run.pendingTasks?.map((t, i) => (
+                                            <li key={i} className="flex justify-between items-center text-[8.5px]" style={{ color: "var(--m-text)" }}>
+                                              <span className="truncate pr-1">• {t.title}</span>
+                                              <span className="shrink-0 text-[8px] font-mono px-1 rounded bg-amber-500/15 text-amber-600 font-bold">{t.priority}</span>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Extracted Items */}
+                              {run.extractedItems.length > 0 && (
+                                <div>
+                                  <p className="text-[10px] font-bold mb-1.5 flex items-center gap-1" style={{ color: "var(--m-text)" }}>
+                                    <FileText size={10} style={{ color: "var(--m-primary)" }} /> Extracted {run.extractedItems.length} item(s)
+                                  </p>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                    {run.extractedItems.map((item, idx) => (
+                                      <div key={idx} className="rounded-lg border p-2 text-[9px]" style={{ borderColor: "var(--m-border-light)", backgroundColor: "var(--m-surface-alt)" }}>
+                                        <div className="flex items-center justify-between gap-1">
+                                          <p className="font-bold truncate" style={{ color: "var(--m-text-heading)" }}>{item.title}</p>
+                                          <span className="shrink-0 rounded px-1.5 py-0.5 text-[8px] font-extrabold uppercase tracking-wide" style={{
+                                            backgroundColor: item.type === "subject" ? "#f3e8ff" : item.type === "flashcard" ? "#ecfdf5" : item.type === "grade" ? "#fffbeb" : item.type === "note" ? "#eff6ff" : item.type.startsWith("finance") ? "#f0fdf4" : "var(--m-surface)",
+                                            color: item.type === "subject" ? "#6b21a8" : item.type === "flashcard" ? "#065f46" : item.type === "grade" ? "#92400e" : item.type === "note" ? "#1e40af" : item.type.startsWith("finance") ? "#166534" : "var(--m-primary)",
+                                            border: "1px solid var(--m-border-light)",
+                                          }}>
+                                            {item.type}
+                                          </span>
+                                        </div>
+                                        <div className="flex justify-between mt-1 text-[8.5px]" style={{ color: "var(--m-text-sub)" }}>
+                                          {item.course && <span>Course: <b>{item.course}</b></span>}
+                                          {item.amount !== undefined && <span>₹{item.amount.toLocaleString("en-IN")}</span>}
+                                          {item.score !== undefined && <span>Score: <b>{item.score}/{item.total || 100}</b></span>}
+                                          {item.time && <span>Time: {item.time}</span>}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Categorized Results */}
+                              {run.status === "done" && totalActions > 0 && (
+                                <div className="pt-2 border-t space-y-2" style={{ borderColor: "var(--m-border-light)" }}>
+                                  <p className="text-[10px] font-bold flex items-center gap-1" style={{ color: "var(--m-success)" }}>
+                                    <CheckCircle2 size={11} /> Actions Executed ({totalActions})
+                                  </p>
+                                  
+                                  <div className="grid gap-1.5 text-[9px]">
+                                    {/* Subjects */}
+                                    {run.createdSubjects && run.createdSubjects.length > 0 && (
+                                      <div className="rounded-lg p-2 flex items-start gap-2" style={{ backgroundColor: "#f3e8ff15", border: "1px solid #d8b4fe40" }}>
+                                        <FolderPlus size={13} className="shrink-0 mt-0.5 text-purple-600" />
+                                        <div>
+                                          <p className="font-bold text-purple-700 dark:text-purple-300">Created Subjects ({run.createdSubjects.length})</p>
+                                          <p className="text-[9px]" style={{ color: "var(--m-text)" }}>{run.createdSubjects.join(", ")}</p>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* Flashcards */}
+                                    {run.createdFlashcards && run.createdFlashcards.length > 0 && (
+                                      <div className="rounded-lg p-2 flex items-start gap-2" style={{ backgroundColor: "#ecfdf515", border: "1px solid #6ee7b740" }}>
+                                        <Layers size={13} className="shrink-0 mt-0.5 text-emerald-600" />
+                                        <div>
+                                          <p className="font-bold text-emerald-700 dark:text-emerald-300">Created Flashcards ({run.createdFlashcards.length})</p>
+                                          <ul className="list-disc list-inside space-y-0.5 mt-0.5" style={{ color: "var(--m-text)" }}>
+                                            {run.createdFlashcards.map((c, i) => <li key={`fc-${i}`}>{c}</li>)}
+                                          </ul>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* Grades */}
+                                    {run.createdGrades && run.createdGrades.length > 0 && (
+                                      <div className="rounded-lg p-2 flex items-start gap-2" style={{ backgroundColor: "#fffbeb15", border: "1px solid #fcd34d40" }}>
+                                        <Award size={13} className="shrink-0 mt-0.5 text-amber-600" />
+                                        <div>
+                                          <p className="font-bold text-amber-700 dark:text-amber-300">Grades Recorded / Updated ({run.createdGrades.length})</p>
+                                          <p className="text-[9px]" style={{ color: "var(--m-text)" }}>{run.createdGrades.join(", ")}</p>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* Notes */}
+                                    {run.createdNotes && run.createdNotes.length > 0 && (
+                                      <div className="rounded-lg p-2 flex items-start gap-2" style={{ backgroundColor: "#eff6ff15", border: "1px solid #93c5fd40" }}>
+                                        <BookOpen size={13} className="shrink-0 mt-0.5 text-blue-600" />
+                                        <div>
+                                          <p className="font-bold text-blue-700 dark:text-blue-300">Study Notes Added ({run.createdNotes.length})</p>
+                                          <p className="text-[9px]" style={{ color: "var(--m-text)" }}>{run.createdNotes.join(", ")}</p>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* Finance */}
+                                    {run.createdFinance && run.createdFinance.length > 0 && (
+                                      <div className="rounded-lg p-2 flex items-start gap-2" style={{ backgroundColor: "#f0fdf415", border: "1px solid #86efac40" }}>
+                                        <Wallet size={13} className="shrink-0 mt-0.5 text-green-600" />
+                                        <div>
+                                          <p className="font-bold text-green-700 dark:text-green-300">Finance Logged ({run.createdFinance.length})</p>
+                                          <p className="text-[9px]" style={{ color: "var(--m-text)" }}>{run.createdFinance.join(", ")}</p>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* Schedule */}
+                                    {run.createdSchedule && run.createdSchedule.length > 0 && (
+                                      <div className="rounded-lg p-2 flex items-start gap-2" style={{ backgroundColor: "#eef2ff15", border: "1px solid #a5b4fc40" }}>
+                                        <CalendarDays size={13} className="shrink-0 mt-0.5 text-indigo-600" />
+                                        <div>
+                                          <p className="font-bold text-indigo-700 dark:text-indigo-300">Scheduled Sessions ({run.createdSchedule.length})</p>
+                                          <p className="text-[9px]" style={{ color: "var(--m-text)" }}>{run.createdSchedule.join(", ")}</p>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* Tasks */}
+                                    {run.createdTasks && run.createdTasks.length > 0 && (
+                                      <div className="rounded-lg p-2 flex items-start gap-2" style={{ backgroundColor: "var(--m-surface-alt)", border: "1px solid var(--m-border-light)" }}>
+                                        <CheckCircle2 size={13} className="shrink-0 mt-0.5 text-[var(--m-primary)]" />
+                                        <div>
+                                          <p className="font-bold" style={{ color: "var(--m-text-heading)" }}>Tasks Created ({run.createdTasks.length})</p>
+                                          <p className="text-[9px]" style={{ color: "var(--m-text)" }}>{run.createdTasks.join(", ")}</p>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Error */}
+                              {run.errorMsg && (
+                                <p className="text-[10px] italic" style={{ color: run.status === "error" ? "var(--m-danger)" : "var(--m-text-sub)" }}>
+                                  {run.errorMsg}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              </div>
+
+              {/* ─── Right: AI Chat Panel (Visible on Desktop / Wide screens) ─── */}
+              <aside
+                onDragEnter={handleChatDragEnter}
+                onDragOver={handleChatDragOver}
+                onDragLeave={handleChatDragLeave}
+                onDrop={handleChatDrop}
+                onPaste={handleChatPaste}
+                className="hidden xl:flex flex-col overflow-hidden rounded-2xl w-full minimal-surface h-[calc(100vh-120px)] min-h-[520px] sticky top-4 shadow-sm feature-zoom relative"
+                style={{ backgroundColor: "var(--m-surface-solid)", border: "1px solid var(--m-border)" }}
+              >
+                {/* Visual Drag & Drop Overlay */}
+                {isChatDraggingOver && (
+                  <div className="absolute inset-0 z-40 flex flex-col items-center justify-center p-6 text-center bg-indigo-950/85 backdrop-blur-md border-2 border-dashed border-indigo-400 rounded-2xl animate-in fade-in duration-150 pointer-events-none">
+                    <div className="p-3.5 rounded-2xl bg-indigo-500/20 text-indigo-300 mb-3 shadow-lg ring-1 ring-indigo-400/40 animate-bounce">
+                      <UploadCloud size={32} />
+                    </div>
+                    <h3 className="text-sm font-bold text-white tracking-wide">Drop PDF or JPG here</h3>
+                    <p className="text-[11px] text-indigo-200/80 mt-1 max-w-[220px]">
+                      Dream It AI will instantly read textbooks, exam papers, notes, or diagrams
+                    </p>
+                  </div>
+                )}
+
+                {/* Side Panel Header */}
+                <div className="flex items-center justify-between p-3 shrink-0" style={{ borderBottom: "1px solid var(--m-border-light)" }}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="grid size-8 shrink-0 place-items-center rounded-lg" style={{ backgroundColor: chatSubjectId ? "var(--m-warning)" : "var(--m-primary)", color: chatSubjectId ? "var(--m-warning-text)" : "var(--m-primary-text)" }}>
+                      <Brain size={16} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs sm:text-sm font-semibold truncate" style={{ color: "var(--m-text-heading)" }}>{chatSubjectId ? "Grounded Tutor" : "Dream It AI"}</p>
+                      {chatSubjectId && (
+                        <p className="text-[10px]" style={{ color: "var(--m-text-muted)" }}>
+                          Sourced Mode
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <select
+                      value={chatSubjectId || ""}
+                      onChange={(e) => setChatSubjectId(e.target.value ? Number(e.target.value) : null)}
+                      className="rounded-lg border px-1.5 py-1 text-[10px] outline-none max-w-[90px]"
+                      style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }}
+                      title="Grounded Subject Mode"
+                    >
+                      <option value="">General AI</option>
+                      {subjects.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsChatMaximized(true)}
+                      className="flex items-center gap-1 rounded-lg px-2 py-1 text-[10.5px] font-semibold transition hover:scale-105 minimal-surface shadow-xs"
+                      style={{ color: "var(--m-primary)", border: "1px solid var(--m-border)" }}
+                      title="Open Wide AI Chat"
+                    >
+                      <Maximize2 size={11} />
+                      <span>Wide</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Past Chats Slide Drawer (in Normal Mode) */}
+                {showPastChatsDrawer ? (
+                  <div className="flex-1 flex flex-col overflow-hidden bg-[var(--m-surface-solid)] animate-in fade-in duration-150">
+                    <div className="flex items-center justify-between p-3 border-b" style={{ borderColor: "var(--m-border-light)" }}>
+                      <div className="flex items-center gap-2">
+                        <History size={14} style={{ color: "var(--m-primary)" }} />
+                        <h4 className="text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Past Chats ({chatSessions.length})</h4>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleNewChat}
+                          className="flex items-center gap-1 rounded-lg px-2 py-1 text-[10.5px] font-bold shadow-xs transition hover:scale-102"
+                          style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}
+                        >
+                          <Plus size={11} />
+                          <span>New</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowPastChatsDrawer(false)}
+                          className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition"
+                          title="Close Past Chats"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto custom-scrollbar p-2.5 space-y-2">
+                      {groupedChatSessions.length === 0 ? (
+                        <div className="p-8 text-center text-xs opacity-60">
+                          <MessageSquare size={24} className="mx-auto mb-2 opacity-40" />
+                          <p className="font-semibold">No past chats yet</p>
+                          <p className="text-[11px] mt-1 opacity-75">Send a message and it will be saved here automatically.</p>
+                        </div>
+                      ) : (
+                        groupedChatSessions.map((group) => (
+                          <div key={group.section} className="space-y-1">
+                            <div className="px-2 pt-1 pb-0.5 text-[10px] font-bold uppercase tracking-wider opacity-60 font-mono" style={{ color: "var(--m-text-sub)" }}>
+                              {group.section}
+                            </div>
+                            {group.items.map((session) => {
+                              const isActive = session.id === activeChatSessionId;
+                              const isRenaming = renamingSessionId === session.id;
+                              const isMenuOpen = openMenuSessionId === session.id;
+                              return (
+                                <div
+                                  key={session.id}
+                                  onClick={() => !isRenaming && handleSelectSession(session.id)}
+                                  className={`group relative flex items-center justify-between w-full p-2.5 rounded-xl text-xs transition cursor-pointer text-left ${
+                                    isMenuOpen ? "z-30" : "z-0"
+                                  } ${
+                                    isActive
+                                      ? "font-semibold shadow-xs"
+                                      : "opacity-85 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5"
+                                  }`}
+                                  style={{
+                                    backgroundColor: isActive ? "var(--m-surface-alt, rgba(255,255,255,0.08))" : "transparent",
+                                    color: isActive ? "var(--m-text-heading, #ffffff)" : "var(--m-text, #e2e8f0)",
+                                    border: isActive ? "1px solid var(--m-border, rgba(255,255,255,0.12))" : "1px solid var(--m-border-light)",
+                                  }}
+                                >
+                                  {isRenaming ? (
+                                    <div className="flex items-center gap-1.5 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+                                      <input
+                                        type="text"
+                                        value={renamingTitleDraft}
+                                        onChange={(e) => setRenamingTitleDraft(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") handleSaveRenameSession(session.id, e);
+                                          if (e.key === "Escape") handleCancelRenameSession(e);
+                                        }}
+                                        autoFocus
+                                        className="flex-1 bg-black/20 dark:bg-white/10 rounded-lg px-2 py-1 text-xs outline-none border border-[var(--m-primary)] text-[var(--m-text-heading)]"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleSaveRenameSession(session.id, e)}
+                                        className="p-1.5 rounded-lg hover:bg-emerald-500/20 text-emerald-400 transition"
+                                        title="Save name"
+                                      >
+                                        <Check size={13} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={handleCancelRenameSession}
+                                        className="p-1.5 rounded-lg hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 transition"
+                                        title="Cancel"
+                                      >
+                                        <X size={13} />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
+                                        <span
+                                          className={`size-2 rounded-full shrink-0 ${
+                                            isActive
+                                              ? "bg-[var(--m-primary)] ring-2 ring-[var(--m-primary)]/30"
+                                              : "bg-zinc-400/40 group-hover:bg-zinc-400"
+                                          }`}
+                                        />
+                                        <div className="truncate flex-1">
+                                          <p className="truncate text-xs font-medium">{session.title || "New Chat"}</p>
+                                          <div className="flex items-center gap-2 mt-0.5 text-[10px] opacity-60 font-mono">
+                                            <span>{formatSessionTime(session.updatedAt)}</span>
+                                            <span>•</span>
+                                            <span>{session.messages?.length || 0} msgs</span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Right Action Icons: Pin Indicator + 3 Horizontal Dots */}
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        {/* Pinned Indicator (visible when pinned) */}
+                                        {session.isPinned && (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => handleTogglePinSession(session.id, e)}
+                                            className="p-1 rounded-md text-[var(--m-primary)] hover:opacity-80 transition"
+                                            title="Pinned chat (click to unpin)"
+                                            aria-label="Pinned"
+                                          >
+                                            <Pin size={13} className="-rotate-45" />
+                                          </button>
+                                        )}
+
+                                        {/* 3 Horizontal Dots Button */}
+                                        <button
+                                          data-chat-menu-trigger
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            setOpenMenuSessionId(isMenuOpen ? null : session.id);
+                                          }}
+                                          className={`p-1 rounded-md transition ${
+                                            isMenuOpen
+                                              ? "opacity-100 bg-black/15 dark:bg-white/15 text-[var(--m-text-heading)]"
+                                              : "opacity-0 group-hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-zinc-200"
+                                          }`}
+                                          title="Chat options"
+                                          aria-label="Chat options"
+                                        >
+                                          <MoreHorizontal size={14} />
+                                        </button>
+                                      </div>
+
+                                      {/* 3 Horizontal Dots Dropdown Menu */}
+                                      {isMenuOpen && (
+                                        <div
+                                          data-chat-menu-dropdown
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="absolute right-2 top-full mt-1 z-50 min-w-[145px] rounded-xl shadow-2xl border py-1.5 animate-in fade-in zoom-in-95 duration-100 backdrop-blur-md"
+                                          style={{
+                                            backgroundColor: "var(--m-surface-solid, #18181b)",
+                                            borderColor: "var(--m-border, rgba(255,255,255,0.14))",
+                                            boxShadow: "0 12px 30px -4px rgba(0, 0, 0, 0.6), 0 4px 12px -2px rgba(0, 0, 0, 0.4)",
+                                          }}
+                                        >
+                                          {/* Pin / Unpin option */}
+                                          <button
+                                            type="button"
+                                            onClick={(e) => handleTogglePinSession(session.id, e)}
+                                            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition text-left hover:bg-black/5 dark:hover:bg-white/10"
+                                            style={{ color: "var(--m-text, #e2e8f0)" }}
+                                          >
+                                            {session.isPinned ? (
+                                              <>
+                                                <PinOff size={13} className="opacity-70" />
+                                                <span>Unpin chat</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <Pin size={13} className="opacity-70 -rotate-45" />
+                                                <span>Pin chat</span>
+                                              </>
+                                            )}
+                                          </button>
+
+                                          {/* Rename option */}
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              setOpenMenuSessionId(null);
+                                              handleStartRenameSession(session.id, session.title || "New Chat", e);
+                                            }}
+                                            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition text-left hover:bg-black/5 dark:hover:bg-white/10"
+                                            style={{ color: "var(--m-text, #e2e8f0)" }}
+                                          >
+                                            <Pencil size={13} className="opacity-70" />
+                                            <span>Rename</span>
+                                          </button>
+
+                                          <div className="my-1 border-t" style={{ borderColor: "var(--m-border-light, rgba(255,255,255,0.08))" }} />
+
+                                          {/* Delete option */}
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              setOpenMenuSessionId(null);
+                                              handleDeleteSession(session.id, e);
+                                            }}
+                                            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition text-left text-rose-400 hover:bg-rose-500/10"
+                                          >
+                                            <Trash2 size={13} />
+                                            <span>Delete</span>
+                                          </button>
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <div className="p-2 border-t text-center shrink-0" style={{ borderColor: "var(--m-border-light)" }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowPastChatsDrawer(false)}
+                        className="text-[11px] font-semibold opacity-75 hover:opacity-100 transition"
+                        style={{ color: "var(--m-primary)" }}
+                      >
+                        ← Return to current conversation
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Messages Container (Fills middle area perfectly) */}
+                    <div ref={chatContainerRef} className="flex-1 space-y-4 overflow-y-auto custom-scrollbar overscroll-contain p-4 text-xs leading-6" style={{ scrollBehavior: "smooth" }}>
+                  {messages.map((m, idx) => (
+                    <div
+                      key={idx}
+                      className={`group flex flex-col ${m.role === "user" ? "items-end ml-auto max-w-[88%]" : "items-start w-full max-w-full"}`}
+                    >
+                      <div
+                        className={`contain-chat transition ${
+                          m.role === "user"
+                            ? `user-chat-bubble ${editingMessageIdx === idx ? "w-full rounded-2xl p-3" : "w-fit rounded-[20px] px-3.5 py-2 sm:px-4 sm:py-2.5"} shadow-xs text-xs sm:text-[13px] leading-relaxed break-words`
+                            : "w-full px-0.5 py-1 text-xs leading-relaxed"
+                        }`}
+                        style={
+                          m.role === "user"
+                            ? {
+                                backgroundColor: "var(--m-chat-user-bg)",
+                                color: "var(--m-chat-user-text)",
+                                border: "1px solid var(--m-chat-user-border, transparent)",
+                                borderRadius: editingMessageIdx === idx ? "16px" : "20px",
+                              }
+                            : {
+                                backgroundColor: "transparent",
+                                color: "var(--m-text)",
+                                border: "none",
+                                boxShadow: "none",
+                              }
+                        }
+                      >
+                        {editingMessageIdx === idx ? (
+                          <div className="space-y-2 py-0.5">
+                            <textarea
+                              value={editingMessageDraft}
+                              onChange={(e) => setEditingMessageDraft(e.target.value)}
+                              rows={Math.max(2, Math.min(6, editingMessageDraft.split("\n").length))}
+                              className="w-full resize-none rounded-xl p-2.5 text-xs leading-relaxed outline-none border transition focus:ring-1 focus:ring-white/40"
+                              style={{
+                                backgroundColor: "rgba(0, 0, 0, 0.25)",
+                                color: "inherit",
+                                borderColor: "rgba(255, 255, 255, 0.2)",
+                              }}
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                  e.preventDefault();
+                                  handleSaveAndSubmitEdit(idx);
+                                } else if (e.key === "Escape") {
+                                  handleCancelEditMessage();
+                                }
+                              }}
+                            />
+                            <div className="flex items-center justify-end gap-1.5 pt-0.5">
+                              <button
+                                type="button"
+                                onClick={handleCancelEditMessage}
+                                className="rounded-lg px-2.5 py-1 text-[11px] font-medium transition hover:bg-white/10"
+                                style={{ border: "1px solid rgba(255,255,255,0.2)", color: "inherit" }}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!editingMessageDraft.trim() || isAsking}
+                                onClick={() => handleSaveAndSubmitEdit(idx)}
+                                className="rounded-lg px-3 py-1 text-[11px] font-bold transition hover:scale-102 disabled:opacity-40 shadow-xs"
+                                style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text, #ffffff)" }}
+                              >
+                                Send
+                              </button>
+                            </div>
+                          </div>
+                        ) : m.content ? (
+                          renderSimpleMarkdown(m.content, m.role === "user")
+                        ) : (
+                          <AIThinkingStatus size="sm" />
+                        )}
+                      </div>
+
+                      {/* ChatGPT-style Action Row (Copy, Share, Edit / Regenerate) */}
+                      {m.content && editingMessageIdx !== idx && (
+                        <div
+                          className={`flex items-center gap-1.5 mt-1 text-[11px] opacity-70 group-hover:opacity-100 transition-opacity ${
+                            m.role === "user" ? "justify-end pr-1" : "justify-start pl-0.5"
+                          }`}
+                          style={{ color: "var(--m-text-sub)" }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleCopyMessage(m.content, idx)}
+                            className="p-1 rounded-md transition hover:bg-black/10 dark:hover:bg-white/10 hover:text-white"
+                            title="Copy message"
+                            aria-label="Copy message"
+                          >
+                            {copiedMessageIdx === idx ? (
+                              <Check size={13} className="text-emerald-400" />
+                            ) : (
+                              <Copy size={13} />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleShareMessage(m.content)}
+                            className="p-1 rounded-md transition hover:bg-black/10 dark:hover:bg-white/10 hover:text-white"
+                            title="Share"
+                            aria-label="Share message"
+                          >
+                            <Share size={13} />
+                          </button>
+                          {m.role === "user" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditMessage(idx, m.content)}
+                              className="p-1 rounded-md transition hover:bg-black/10 dark:hover:bg-white/10 hover:text-white"
+                              title="Edit prompt"
+                              aria-label="Edit message"
+                            >
+                              <Pencil size={13} />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleRegenerateResponse(idx)}
+                              className="p-1 rounded-md transition hover:bg-black/10 dark:hover:bg-white/10 hover:text-white"
+                              title="Regenerate response"
+                              aria-label="Regenerate response"
+                            >
+                              <RotateCcw size={13} />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {isAsking && messages[messages.length - 1]?.role !== "assistant" && (
+                    <div className="flex w-fit items-center gap-2 py-1.5 pl-0.5">
+                      <AIThinkingStatus size="sm" />
+                    </div>
+                  )}
+                </div>
+
+
+                {/* Chat Input (Positioned cleanly at bottom) */}
+                <form
+                  onSubmit={askCoach}
+                  onPaste={handleChatPaste}
+                  onWheel={(e) => {
+                    if (chatContainerRef.current) {
+                      const target = e.target as HTMLElement | null;
+                      const isInput = target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT");
+                      if (!isInput) {
+                        chatContainerRef.current.scrollTop += e.deltaY;
+                      }
+                    }
+                  }}
+                  className="shrink-0 p-3"
+                  style={{ borderTop: "1px solid var(--m-border-light)" }}
+                >
+                  <input ref={chatFileInputRef} type="file" onChange={handleChatFileSelect} className="hidden" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.docx,.doc,.txt,.py,.js,.ts,.tsx,.jsx,.json,.csv,.html,.css,.cpp,.c,.java,.sql,.md" />
+                  {isExtractingChatFile && (
+                    <div className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-medium mb-2 animate-pulse" style={{ backgroundColor: "var(--m-surface-alt)", border: "1px solid var(--m-border)", color: "var(--m-primary)" }}>
+                      <Loader2 size={13} className="animate-spin text-indigo-400 shrink-0" />
+                      <span className="truncate">Reading & extracting text from document...</span>
+                    </div>
+                  )}
+                  {chatFile && !isExtractingChatFile && (
+                    <div className="flex items-center justify-between rounded-xl px-3 py-1.5 text-xs font-bold mb-2" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-primary)", border: "1px solid var(--m-border)" }}>
+                      <span className="flex items-center gap-2 truncate">
+                        {chatFile.isImage && chatFile.dataUrl ? (
+                          <img src={chatFile.dataUrl} alt={chatFile.name} className="size-6 object-cover rounded-md border border-black/10 shrink-0" />
+                        ) : chatFile.isPdf ? (
+                          <span className="flex items-center gap-1 shrink-0 text-rose-400">
+                            <FileText size={14} />
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-rose-500/15 font-bold uppercase tracking-wider">PDF</span>
+                          </span>
+                        ) : (
+                          <Paperclip size={13} />
+                        )}
+                        <span className="truncate">{chatFile.name}</span>
+                        <span className="text-[10px] opacity-75 font-mono">
+                          ({chatFile.pageCount ? `${chatFile.pageCount} pgs • ` : ""}{formatFileSize(chatFile.size)})
+                        </span>
+                      </span>
+                      <button type="button" onClick={() => setChatFile(null)} className="p-0.5 rounded-md transition hover:opacity-75" title="Remove attachment"><X size={14} /></button>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 rounded-2xl p-1.5 pl-2.5" style={{ border: "1px solid var(--m-border)", backgroundColor: "var(--m-input-bg)" }}>
+                    <button type="button" onClick={() => chatFileInputRef.current?.click()} className="flex items-center justify-center size-9 rounded-xl transition shrink-0 hover:opacity-75" style={{ color: "var(--m-text-sub)" }} title="Attach file">
+                      <Paperclip size={17} />
+                    </button>
+                    <button type="button" onClick={() => setSnapModalOpen(true)} className="flex items-center justify-center size-9 rounded-xl transition shrink-0 hover:opacity-75" style={{ color: "var(--m-primary)" }} title="Snap & Solve with Camera">
+                      <Camera size={17} />
+                    </button>
+
+                    <input value={chatDraft} onChange={(e) => setChatDraft(e.target.value)} onPaste={handleChatPaste} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); askCoach(); } }} className="flex-1 bg-transparent py-1.5 text-xs outline-none" style={{ color: "var(--m-text)" }} placeholder="Ask Dream It AI anything, or paste image/file..." />
+                    <VoiceInputButton
+                      value={chatDraft}
+                      onChange={setChatDraft}
+                      disabled={isAsking}
+                      size={15}
+                    />
+                    <button type="submit" disabled={(!chatDraft.trim() && !chatFile) || isAsking} className="grid size-9 place-items-center rounded-xl transition hover:scale-105 disabled:opacity-40 shrink-0" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                      <Send size={15} />
+                    </button>
+                  </div>
+                </form>
+              </>
+            )}
+          </aside>
+            </div>
+          )}
+
+          {/* ═══════════ PLANNER VIEW (ZERO-SETUP MULTI-VIEWS) ═══════════ */}
+          {activeNav === "Planner" && (
+            <div className="space-y-6 w-full min-w-0 max-w-full">
+              {/* Multi-View Header & Switcher */}
+              <div className="flex flex-wrap items-center justify-between gap-4 pb-4" style={{ borderBottom: "1px solid var(--m-border)" }}>
+                <div>
+                  <p className="font-[DM_Mono] text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--m-text-sub)" }}>
+                    Zero-Setup Academic Planner
+                  </p>
+                  <h2 className="mt-1 font-[Roboto_Slab] text-3xl font-semibold" style={{ color: "var(--m-text-heading)" }}>
+                    Study Blocks & Multi-Views
+                  </h2>
+                </div>
+
+                {/* Action shortcut & Instant View Mode Switcher */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAutopilotMode("syllabus");
+                      setActiveNav("Today");
+                      setTimeout(() => {
+                        document.getElementById("autopilot-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }, 100);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-bold transition shadow-xs cursor-pointer border hover:scale-105 active:scale-95"
+                    style={{
+                      background: "linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(236, 72, 153, 0.12))",
+                      borderColor: "rgba(99, 102, 241, 0.35)",
+                      color: "var(--m-primary)",
+                    }}
+                  >
+                    <Sparkles size={13} className="text-amber-500" />
+                    <span>Autopilot Exam Planner</span>
+                  </button>
+
+                  <div
+                    className="flex items-center gap-1 p-1 rounded-2xl border shrink-0"
+                    style={{
+                      backgroundColor: "var(--m-surface-alt)",
+                      borderColor: "var(--m-border-light)",
+                    }}
+                  >
+                  <button
+                    type="button"
+                    onClick={() => setPlannerViewMode("timeline")}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer"
+                    style={
+                      plannerViewMode === "timeline"
+                        ? { backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" }
+                        : { color: "var(--m-text-sub)" }
+                    }
+                  >
+                    <Clock3 size={13} />
+                    <span>Timeline</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPlannerViewMode("kanban")}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer"
+                    style={
+                      plannerViewMode === "kanban"
+                        ? { backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" }
+                        : { color: "var(--m-text-sub)" }
+                    }
+                  >
+                    <Layers size={13} />
+                    <span>Kanban</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPlannerViewMode("calendar")}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer"
+                    style={
+                      plannerViewMode === "calendar"
+                        ? { backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" }
+                        : { color: "var(--m-text-sub)" }
+                    }
+                  >
+                    <CalendarDays size={13} />
+                    <span>7-Day Matrix</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+              {/* 1. TIMELINE VIEW */}
+              {plannerViewMode === "timeline" && (
+                <section className="grid gap-5 sm:gap-7 xl:grid-cols-[0.95fr_1.05fr] w-full min-w-0 max-w-full">
+                  <div className="rounded-[1.5rem] p-4 sm:p-6 shadow-xs feature-zoom w-full min-w-0 max-w-full" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                    <p className="font-[DM_Mono] text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--m-text-sub)" }}>Build a Doable Day</p>
+                    <h3 className="mt-1 font-[Roboto_Slab] text-2xl font-semibold" style={{ color: "var(--m-text-heading)" }}>Plan your study blocks.</h3>
+
+                    <form onSubmit={addScheduleItem} className="mt-6 space-y-4 rounded-2xl p-4 sm:p-4.5" style={{ backgroundColor: "var(--m-surface-alt)" }}>
+                      <label className="block text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>
+                        What needs a place?
+                        <input value={planTitle} onChange={(e) => setPlanTitle(e.target.value)} className="mt-1.5 w-full rounded-xl border px-3.5 py-2.5 text-sm font-normal outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} placeholder="e.g. Solve Linear Algebra Set #3" required />
+                      </label>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Start time
+                          <input type="text" value={planTime} onChange={(e) => setPlanTime(e.target.value)} className="mt-1.5 w-full rounded-xl border px-3 py-2.5 text-sm font-normal outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} placeholder="09:00 AM" />
+                        </label>
+                        <label className="text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Subject / Course
+                          <div className="flex items-center gap-1 mt-1.5">
+                            <select
+                              value={planCourse}
+                              onChange={(e) => {
+                                if (e.target.value === "__ADD_NEW__") {
+                                  setSubjectsOpen(true);
+                                } else {
+                                  setPlanCourse(e.target.value);
+                                }
+                              }}
+                              className="w-full rounded-xl border px-3 py-2.5 text-sm font-normal outline-none cursor-pointer"
+                              style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }}
+                            >
+                              <option value="">General Study</option>
+                              {subjects.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+                              <option value="__ADD_NEW__" className="font-bold">➕ Add New Subject...</option>
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => setSubjectsOpen(true)}
+                              className="rounded-xl p-2.5 text-xs font-bold transition hover:opacity-80 shrink-0 cursor-pointer"
+                              style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-primary)", border: "1px solid var(--m-border-light)" }}
+                              title="Add New Subject"
+                            >
+                              <Plus size={16} />
+                            </button>
+                          </div>
+                        </label>
+                      </div>
+                      <label className="block text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Notes
+                        <input value={planNote} onChange={(e) => setPlanNote(e.target.value)} className="mt-1.5 w-full rounded-xl border px-3.5 py-2 text-sm font-normal outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} placeholder="Quiet room, 45 minutes" />
+                      </label>
+                      <button type="submit" className="inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold shadow-xs transition hover:scale-105 cursor-pointer" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                        <Plus size={16} /><span>Add to Schedule</span>
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* Timeline Blocks */}
+                  <div className="rounded-[1.5rem] p-4 sm:p-6 shadow-xs feature-zoom w-full min-w-0 max-w-full" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                    <div className="flex items-end justify-between pb-4" style={{ borderBottom: "1px solid var(--m-border-light)" }}>
+                      <div>
+                        <p className="font-[DM_Mono] text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--m-text-sub)" }}>Timeline</p>
+                        <h3 className="mt-1 font-[Roboto_Slab] text-2xl font-semibold" style={{ color: "var(--m-text-heading)" }}>Your Schedule</h3>
+                      </div>
+                      <span className="rounded-full px-3 py-1 font-[DM_Mono] text-xs font-bold" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-primary)" }}>{scheduleItems.length} blocks</span>
+                    </div>
+                    <div className="mt-6 space-y-3">
+                      {scheduleItems.length ? scheduleItems.map((item, idx) => (
+                        <div key={item.id || idx} className={`group flex items-center gap-2.5 sm:gap-3.5 rounded-2xl p-3 sm:p-4 transition feature-chip contain-schedule w-full min-w-0 max-w-full ${item.done ? "opacity-60" : ""}`} style={{ border: "1px solid var(--m-border-light)", backgroundColor: "var(--m-surface-hover)" }}>
+                          <button onClick={() => toggleScheduleDone(item.id, item.title)} className="grid size-6 shrink-0 place-items-center rounded-full border transition cursor-pointer" style={item.done ? { borderColor: "var(--m-primary)", backgroundColor: "var(--m-primary)", color: "white" } : { borderColor: "var(--m-border)", backgroundColor: "var(--m-surface)" }}>
+                            {item.done && <Check size={14} strokeWidth={3} />}
+                          </button>
+                          <span className="w-14 sm:w-16 shrink-0 font-[DM_Mono] text-xs font-bold" style={{ color: "var(--m-primary)" }}>{item.time}</span>
+                          <span className={`h-10 w-1 shrink-0 rounded-full ${item.tone}`} />
+                          <div className="min-w-0 flex-1">
+                            <b className={`block text-sm ${item.done ? "line-through" : ""}`} style={{ color: "var(--m-text-heading)" }}>
+                              {item.title}
+                              {item.createdBy === "agent" && (
+                                <span className="ml-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase align-middle" style={{ backgroundColor: "var(--m-primary-transparent)", color: "var(--m-primary)", border: "1px solid var(--m-primary)" }}>
+                                  <Sparkles size={9} /> Autopilot
+                                </span>
+                              )}
+                            </b>
+                            <small className="block text-xs" style={{ color: "var(--m-text-sub)" }}>{item.course ? `${item.course} • ` : ""}{item.note}</small>
+                          </div>
+                          {/* Note Link */}
+                          <button
+                            type="button"
+                            onClick={() => openNoteForTask(item.course || "", item.title)}
+                            className="opacity-80 hover:opacity-100 flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold transition hover:scale-105 shrink-0 cursor-pointer"
+                            style={{
+                              backgroundColor: "var(--m-surface-alt)",
+                              color: "var(--m-primary)",
+                              border: "1px solid var(--m-border-light)",
+                            }}
+                            title="Open linked study note"
+                          >
+                            <FileText size={11} />
+                            <span className="hidden sm:inline">Note</span>
+                          </button>
+                          <button onClick={() => deleteScheduleItem(item.id, item.title)} className="opacity-70 sm:opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition cursor-pointer shrink-0" style={{ color: "var(--m-danger)" }}><Trash2 size={16} /></button>
+                        </div>
+                      )) : (
+                        <div className="rounded-2xl border border-dashed p-8 text-center" style={{ borderColor: "var(--m-border)" }}>
+                          <CalendarDays className="mx-auto" size={32} style={{ color: "var(--m-primary)" }} />
+                          <p className="mt-3 font-[Roboto_Slab] text-lg font-semibold" style={{ color: "var(--m-text-heading)" }}>No schedule blocks yet.</p>
+                          <p className="mt-1 text-xs" style={{ color: "var(--m-text-sub)" }}>Plan your first study block on the left.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              {/* 2. KANBAN BOARD VIEW */}
+              {plannerViewMode === "kanban" && (
+                <section className="grid gap-5 md:grid-cols-3">
+                  {/* Column 1: Backlog (To Do) */}
+                  <div className="rounded-[1.5rem] p-5 shadow-xs flex flex-col" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                    <div className="flex items-center justify-between pb-3 mb-3 border-b" style={{ borderColor: "var(--m-border-light)" }}>
+                      <div className="flex items-center gap-2">
+                        <span className="size-2.5 rounded-full bg-slate-400" />
+                        <h4 className="font-bold text-sm" style={{ color: "var(--m-text-heading)" }}>Backlog (To Do)</h4>
+                      </div>
+                      <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-text-sub)" }}>
+                        {tasks.filter((t) => !t.done && t.priority !== "high").length}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3 flex-1 overflow-y-auto custom-scrollbar pr-1 min-h-[350px]">
+                      {tasks
+                        .filter((t) => !t.done && t.priority !== "high")
+                        .map((task) => {
+                          const sub = subjects.find((s) => s.name.toLowerCase() === task.course.toLowerCase());
+                          return (
+                            <div
+                              key={task.id}
+                              className="p-3.5 rounded-2xl border transition duration-200 hover:shadow-xs space-y-2 feature-chip"
+                              style={{
+                                backgroundColor: "var(--m-surface-alt)",
+                                borderColor: "var(--m-border-light)",
+                              }}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span
+                                  className="text-[10px] font-bold px-2 py-0.5 rounded-md truncate max-w-[140px]"
+                                  style={{
+                                    backgroundColor: sub ? `${sub.color}33` : "var(--m-surface)",
+                                    color: "var(--m-text)",
+                                  }}
+                                >
+                                  {task.course || "General"}
+                                </span>
+                                {task.deadline && (
+                                  <span className="text-[9px] font-mono opacity-70">
+                                    📅 {daysUntil(task.deadline)}d
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs font-semibold" style={{ color: "var(--m-text)" }}>
+                                {task.title}
+                              </p>
+                              <div className="flex items-center justify-between pt-1 text-[10px]">
+                                <button
+                                  type="button"
+                                  onClick={() => openNoteForTask(task.course, task.title)}
+                                  className="flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                                >
+                                  <FileText size={11} />
+                                  <span>Open Note</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleTask(task.id)}
+                                  className="px-2 py-0.5 rounded-md border text-[10px] font-bold hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer"
+                                  style={{ borderColor: "var(--m-border)" }}
+                                >
+                                  ✓ Done
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      {tasks.filter((t) => !t.done && t.priority !== "high").length === 0 && (
+                        <p className="text-xs opacity-50 italic py-8 text-center">No backlog tasks.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Column 2: In Progress (Active Focus) */}
+                  <div className="rounded-[1.5rem] p-5 shadow-xs flex flex-col" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                    <div className="flex items-center justify-between pb-3 mb-3 border-b" style={{ borderColor: "var(--m-border-light)" }}>
+                      <div className="flex items-center gap-2">
+                        <span className="size-2.5 rounded-full bg-amber-500 animate-pulse" />
+                        <h4 className="font-bold text-sm" style={{ color: "var(--m-text-heading)" }}>In Progress (Focus)</h4>
+                      </div>
+                      <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-text-sub)" }}>
+                        {tasks.filter((t) => !t.done && t.priority === "high").length}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3 flex-1 overflow-y-auto custom-scrollbar pr-1 min-h-[350px]">
+                      {tasks
+                        .filter((t) => !t.done && t.priority === "high")
+                        .map((task) => {
+                          const sub = subjects.find((s) => s.name.toLowerCase() === task.course.toLowerCase());
+                          return (
+                            <div
+                              key={task.id}
+                              className="p-3.5 rounded-2xl border transition duration-200 hover:shadow-xs space-y-2 feature-chip"
+                              style={{
+                                backgroundColor: "var(--m-surface-alt)",
+                                borderColor: "var(--m-primary)",
+                                borderWidth: "1.5px",
+                              }}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span
+                                  className="text-[10px] font-bold px-2 py-0.5 rounded-md truncate max-w-[140px]"
+                                  style={{
+                                    backgroundColor: sub ? `${sub.color}33` : "var(--m-surface)",
+                                    color: "var(--m-text)",
+                                  }}
+                                >
+                                  {task.course || "General"}
+                                </span>
+                                <span className="text-[9px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                                  🔥 Urgent
+                                </span>
+                              </div>
+                              <p className="text-xs font-bold" style={{ color: "var(--m-text)" }}>
+                                {task.title}
+                              </p>
+                              <div className="flex items-center justify-between pt-1 text-[10px]">
+                                <button
+                                  type="button"
+                                  onClick={() => openNoteForTask(task.course, task.title)}
+                                  className="flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                                >
+                                  <FileText size={11} />
+                                  <span>Open Note</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleTask(task.id)}
+                                  className="px-2 py-0.5 rounded-md text-[10px] font-bold text-white transition hover:scale-105 cursor-pointer"
+                                  style={{ backgroundColor: "var(--m-primary)" }}
+                                >
+                                  ✓ Complete
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      {tasks.filter((t) => !t.done && t.priority === "high").length === 0 && (
+                        <p className="text-xs opacity-50 italic py-8 text-center">No high priority focus items right now.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Column 3: Completed */}
+                  <div className="rounded-[1.5rem] p-5 shadow-xs flex flex-col" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                    <div className="flex items-center justify-between pb-3 mb-3 border-b" style={{ borderColor: "var(--m-border-light)" }}>
+                      <div className="flex items-center gap-2">
+                        <span className="size-2.5 rounded-full bg-emerald-500" />
+                        <h4 className="font-bold text-sm" style={{ color: "var(--m-text-heading)" }}>Completed</h4>
+                      </div>
+                      <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-text-sub)" }}>
+                        {tasks.filter((t) => t.done).length}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3 flex-1 overflow-y-auto custom-scrollbar pr-1 min-h-[350px]">
+                      {tasks
+                        .filter((t) => t.done)
+                        .slice(0, 15)
+                        .map((task) => (
+                          <div
+                            key={task.id}
+                            className="p-3.5 rounded-2xl border transition duration-200 opacity-60 space-y-1.5"
+                            style={{
+                              backgroundColor: "var(--m-surface-alt)",
+                              borderColor: "var(--m-border-light)",
+                            }}
+                          >
+                            <span className="text-[9px] font-bold uppercase opacity-75">{task.course}</span>
+                            <p className="text-xs line-through" style={{ color: "var(--m-text-muted)" }}>
+                              {task.title}
+                            </p>
+                            <div className="flex items-center justify-between pt-1">
+                              <span className="text-[9px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">+15 XP Earned</span>
+                              <button
+                                type="button"
+                                onClick={() => toggleTask(task.id)}
+                                className="text-[10px] text-muted-foreground hover:underline cursor-pointer"
+                              >
+                                Undo
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      {tasks.filter((t) => t.done).length === 0 && (
+                        <p className="text-xs opacity-50 italic py-8 text-center">Complete tasks to see them here.</p>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              {/* 3. 7-DAY MATRIX CALENDAR VIEW */}
+              {plannerViewMode === "calendar" && (
+                <section className="rounded-[1.5rem] p-6 shadow-xs" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                  <div className="flex items-center justify-between pb-4 mb-4 border-b" style={{ borderColor: "var(--m-border-light)" }}>
+                    <div>
+                      <h3 className="font-[Roboto_Slab] text-2xl font-semibold" style={{ color: "var(--m-text-heading)" }}>
+                        Weekly Study Matrix
+                      </h3>
+                      <p className="text-xs mt-0.5" style={{ color: "var(--m-text-sub)" }}>
+                        Visual 7-day academic distribution across all courses
+                      </p>
+                    </div>
+                    <span className="text-xs font-mono font-bold px-3 py-1 rounded-full" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-primary)" }}>
+                      {scheduleItems.length} active sessions
+                    </span>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
+                    {weekDayLabels.map((dayName, dayIdx) => {
+                      // Distribute schedule items across days based on index or custom day assignment
+                      const dayBlocks = scheduleItems.filter((_, i) => i % 7 === dayIdx);
+                      return (
+                        <div
+                          key={dayName}
+                          className="flex flex-col p-3 rounded-2xl border min-h-[220px]"
+                          style={{
+                            backgroundColor: "var(--m-surface-alt)",
+                            borderColor: "var(--m-border-light)",
+                          }}
+                        >
+                          <div className="flex items-center justify-between pb-2 mb-2 border-b border-black/5 dark:border-white/10">
+                            <span className="font-bold text-xs" style={{ color: "var(--m-text-heading)" }}>
+                              {dayName}
+                            </span>
+                            <span className="text-[10px] font-mono opacity-60 font-bold">
+                              {dayBlocks.length}
+                            </span>
+                          </div>
+
+                          <div className="space-y-2 flex-1 overflow-y-auto custom-scrollbar pr-0.5">
+                            {dayBlocks.map((item, i) => (
+                              <div
+                                key={item.id || i}
+                                className="p-2 rounded-xl border text-[11px] space-y-1 feature-chip"
+                                style={{
+                                  backgroundColor: "var(--m-surface)",
+                                  borderColor: "var(--m-border-light)",
+                                }}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="font-mono text-[9px] text-indigo-600 dark:text-indigo-400 font-bold truncate">
+                                    {item.time}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => openNoteForTask(item.course || "", item.title)}
+                                    className="p-0.5 rounded hover:bg-black/5 dark:hover:bg-white/10 text-emerald-600 dark:text-emerald-400"
+                                    title="Open linked study note"
+                                  >
+                                    <FileText size={10} />
+                                  </button>
+                                </div>
+                                <p className="font-semibold leading-tight line-clamp-2" style={{ color: "var(--m-text)" }}>
+                                  {item.title}
+                                </p>
+                                {item.course && (
+                                  <span className="text-[9px] opacity-70 block truncate font-medium">
+                                    {item.course}
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                            {dayBlocks.length === 0 && (
+                              <div className="py-6 text-center opacity-40">
+                                <span className="text-[10px] italic">No blocks</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPlanTime("10:00 AM");
+                              setPlannerViewMode("timeline");
+                            }}
+                            className="mt-2 w-full py-1 text-[10px] font-bold rounded-lg border border-dashed hover:border-solid transition cursor-pointer text-center"
+                            style={{ borderColor: "var(--m-border)", color: "var(--m-text-sub)" }}
+                          >
+                            + Add Block
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+            </div>
+          )}
+
+          {/* ═══════════ PROJECTS VIEW ═══════════ */}
+          {activeNav === "Projects" && (
+            <section className="space-y-6 w-full min-w-0 max-w-full">
+              <div className="flex flex-wrap items-center justify-between gap-4 pb-4" style={{ borderBottom: "1px solid var(--m-border)" }}>
+                <div>
+                  <p className="font-[DM_Mono] text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--m-text-sub)" }}>Course Workspaces</p>
+                  <h2 className="mt-1 font-[Roboto_Slab] text-3xl font-semibold" style={{ color: "var(--m-text-heading)" }}>Your Projects</h2>
+                </div>
+                <button onClick={() => setSubjectsOpen(true)} className="inline-flex items-center gap-2 rounded-full px-4.5 py-2.5 text-xs font-bold shadow-xs transition hover:scale-105" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                  <Plus size={16} /><span>Create Project</span>
+                </button>
+              </div>
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 w-full min-w-0 max-w-full">
+                {subjects.length ? subjects.map((sub) => {
+                  const stats = projectStatsByCourse.get(sub.name) || { total: 0, open: 0, done: 0, pct: 0 };
+                  const openCount = stats.open;
+                  const doneCount = stats.done;
+                  const total = stats.total;
+                  const projectPct = stats.pct;
+                  const subjectFiles = attachedFiles.filter((f) => f.subjectId === sub.id);
+                  const gpa = subjectGPAs[sub.id];
+
+                  return (
+                    <div key={sub.id} className="group flex flex-col justify-between rounded-[1.5rem] p-4 sm:p-5 shadow-xs transition hover:shadow-md feature-zoom w-full min-w-0 max-w-full" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                      <div>
+                        <div className="flex items-start justify-between">
+                          <span className="grid size-12 place-items-center rounded-2xl shadow-xs" style={{ backgroundColor: sub.color }}><Folder size={22} style={{ color: "var(--m-primary)" }} /></span>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                            <button onClick={() => setEditingSubject(sub)} className="p-1.5 rounded-lg" style={{ color: "var(--m-text-sub)" }}><Edit2 size={15} /></button>
+                            <button onClick={() => deleteSubject(sub.id)} className="p-1.5 rounded-lg" style={{ color: "var(--m-danger)" }}><Trash2 size={15} /></button>
+                          </div>
+                        </div>
+                        <h3 className="mt-4 font-[Roboto_Slab] text-xl font-semibold" style={{ color: "var(--m-text-heading)" }}>{sub.name}</h3>
+                        <p className="mt-1 text-xs line-clamp-2" style={{ color: "var(--m-text-sub)" }}>{sub.description || "Course workspace"}</p>
+                      </div>
+                      <div className="mt-6 pt-4" style={{ borderTop: "1px solid var(--m-border-light)" }}>
+                        <div className="flex items-center justify-between text-xs mb-1.5 font-medium" style={{ color: "var(--m-text-sub)" }}>
+                          <span>{openCount} open tasks</span>
+                          <span>{projectPct}% done</span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full" style={{ backgroundColor: "var(--m-surface-alt)" }}>
+                          <div className="h-full rounded-full transition-all duration-300" style={{ width: `${projectPct}%`, backgroundColor: "var(--m-primary)" }} />
+                        </div>
+                        {gpa !== undefined && (
+                          <p className="mt-2 text-xs font-bold" style={{ color: "var(--m-primary)" }}>📊 Grade: {gpa}%</p>
+                        )}
+                        <div className="mt-3 flex items-center justify-between text-xs pt-2.5" style={{ borderTop: "1px solid var(--m-border-light)" }}>
+                          <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--m-text-sub)" }}><Paperclip size={13} />{subjectFiles.length} files</span>
+                          <button onClick={() => setFilesModalSubject(sub)} className="rounded-lg px-2 py-1 font-bold transition hover:opacity-80" style={{ color: "var(--m-primary)" }}>Manage →</button>
+                        </div>
+                        <button onClick={() => { setSelectedSubject(sub.name); setActiveNav("Today"); }} className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold hover:opacity-80 feature-chip" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-primary)", border: "1px solid var(--m-border)" }}>
+                          <span>Open Tasks</span><ArrowUpRight size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }) : (
+                  <div className="col-span-full rounded-[1.5rem] border border-dashed p-10 text-center" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-surface)" }}>
+                    <div className="mx-auto grid size-14 place-items-center rounded-2xl" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-primary)" }}><FolderPlus size={28} /></div>
+                    <h3 className="mt-4 font-[Roboto_Slab] text-xl font-semibold" style={{ color: "var(--m-text-heading)" }}>No projects yet</h3>
+                    <p className="mt-1 text-xs" style={{ color: "var(--m-text-sub)" }}>Create your first subject project to organize your studies.</p>
+                    <button onClick={() => setSubjectsOpen(true)} className="mt-5 inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold shadow-xs transition hover:scale-105" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                      <Plus size={16} /><span>Create Project</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* ═══════════ FOCUS VIEW ═══════════ */}
+          {activeNav === "Focus" && (
+            <section className="grid gap-5 sm:gap-7 xl:grid-cols-[1.2fr_0.8fr] w-full min-w-0 max-w-full">
+              <div className="rounded-[1.5rem] p-4 sm:p-6 shadow-xs feature-zoom w-full min-w-0 max-w-full" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                <div className="flex flex-wrap items-center justify-between gap-4 pb-5" style={{ borderBottom: "1px solid var(--m-border-light)" }}>
+                  <div>
+                    <p className="font-[DM_Mono] text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--m-text-sub)" }}>7-Day Focus Graph</p>
+                    <h2 className="mt-1 font-[Roboto_Slab] text-2xl font-semibold" style={{ color: "var(--m-text-heading)" }}>Daily Focus Activity</h2>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="rounded-full px-3 py-1 font-[DM_Mono] text-xs font-bold" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-primary)" }}>🔥 {streakDays}d streak</span>
+                    <span className="rounded-full px-3 py-1 font-[DM_Mono] text-xs font-bold" style={{ backgroundColor: "var(--m-sidebar-pill-bg)", color: "var(--m-primary)" }}>{totalSessions} sessions</span>
+                  </div>
+                </div>
+                <div className="mt-6 grid h-48 grid-cols-7 items-end gap-1.5 sm:gap-3 rounded-2xl p-3 sm:p-5 w-full min-w-0 max-w-full" style={{ backgroundColor: "var(--m-surface-hover)", border: "1px solid var(--m-border-light)" }}>
+                  {graphData.map((d) => {
+                    const barPct = graphMaxMinutes > 0 ? (d.effectiveMinutes / graphMaxMinutes) * 100 : 0;
+                    return (
+                      <div key={d.dateKey} className="group relative flex h-full flex-col justify-end items-center gap-2 min-w-0" title={`${d.label}: ${d.minutes}m`}>
+                        {d.isTimerActive ? (
+                          <span className="text-[10px] font-bold font-[DM_Mono] flex items-center gap-1 animate-pulse truncate" style={{ color: "var(--m-primary)" }}>
+                            <span className="size-1.5 rounded-full bg-emerald-500 animate-ping shrink-0" />
+                            {d.minutes > 0 ? `${d.minutes}m` : `${activeFocusSeconds}s`}
+                          </span>
+                        ) : d.minutes > 0 ? (
+                          <span className="text-[10px] font-bold font-[DM_Mono] truncate" style={{ color: "var(--m-primary)" }}>{d.minutes}m</span>
+                        ) : null}
+                        <div
+                          className={`w-full max-w-[38px] rounded-t-xl transition-all duration-300 ${
+                            d.isTimerActive ? "ring-2 ring-[var(--m-primary)] ring-offset-2 ring-offset-black/20" : ""
+                          }`}
+                          style={{
+                            height: `${Math.max(6, Math.min(100, barPct))}%`,
+                            backgroundColor: d.isToday ? "var(--m-primary)" : d.minutes > 0 ? "var(--m-accent)" : "var(--m-border)",
+                            opacity: d.minutes > 0 || d.isToday ? 1 : 0.4,
+                            boxShadow: d.isTimerActive ? "0 0 16px var(--m-primary)" : undefined,
+                          }}
+                        />
+                        <span className={`text-[11px] font-[DM_Mono] truncate ${d.isToday ? "font-bold" : ""}`} style={{ color: d.isToday ? "var(--m-primary)" : "var(--m-text-sub)" }}>{d.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-5 flex items-center justify-between text-xs" style={{ color: "var(--m-text-sub)" }}>
+                  <span>Today: <b style={{ color: "var(--m-primary)" }}>{formatStudyTime(todayMinutes)} {isRunning && !isBreak && activeFocusSeconds > 0 ? `(${activeFocusSeconds}s live)` : ""}</b></span>
+                  <span>7-Day Total: <b style={{ color: "var(--m-primary)" }}>{formatStudyTime(totalLoggedMinutes)}</b></span>
+                </div>
+              </div>
+
+              <div className="space-y-5 w-full min-w-0 max-w-full">
+                {/* Goal Card */}
+                <div className="rounded-[1.5rem] p-4 sm:p-6 shadow-md feature-zoom w-full min-w-0 max-w-full" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2"><Target size={20} style={{ color: "var(--m-accent)" }} /><span className="font-[DM_Mono] text-[10px] uppercase tracking-[0.14em] opacity-90">Weekly Goal</span></div>
+                    <span className="font-[DM_Mono] text-xs font-bold px-2 py-0.5 rounded-md" style={{ backgroundColor: "rgba(0,0,0,0.2)" }}>{targetProgress}%</span>
+                  </div>
+                  <p className="mt-4 font-[Roboto_Slab] text-3xl font-semibold">{weeklyGoalHours}h Target</p>
+                  <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-black/20">
+                    <div className="h-full rounded-full transition-all duration-500" style={{ width: `${targetProgress}%`, backgroundColor: "var(--m-accent)" }} />
+                  </div>
+                  <p className="mt-2 text-xs opacity-90">{targetProgress >= 100 ? "🎉 Goal reached!" : `${formatStudyTime(Math.max(0, focusTargetMinutes - weeklyStudyMinutes))} remaining`}</p>
+                  <div className="mt-3 flex gap-1 border-t border-black/10 pt-3">
+                    {[8, 12, 16, 20].map((h) => (
+                      <button key={h} onClick={() => { setWeeklyGoalHours(h); localStorage.setItem("dreamit_weekly_goal_hours", h.toString()); }} className={`px-2 py-0.5 rounded text-[10px] font-bold ${weeklyGoalHours === h ? "bg-black/30" : "opacity-75 hover:opacity-100"}`}>{h}h</button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Live Timer */}
+                <div className="rounded-[1.5rem] p-6 shadow-xs feature-zoom" style={{ backgroundColor: "var(--m-surface-alt)", border: "1px solid var(--m-border)" }}>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="font-[DM_Mono] text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--m-text-sub)" }}>{isBreak ? "Break Timer ☕" : "Focus Timer"}</p>
+                    <span className="text-xs font-bold" style={{ color: "var(--m-primary)" }}>Session {pomodoroSession + 1}</span>
+                  </div>
+                  <div className="flex items-center justify-between rounded-2xl p-4" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border-light)" }}>
+                    <div>
+                      <p className="text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>{isBreak ? "Break" : `${timerPreset}min Focus`}</p>
+                      <p className="font-[DM_Mono] text-2xl font-bold mt-1" style={{ color: "var(--m-primary)" }}>{formatTime(seconds)}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setIsRunning((r) => !r)} className="inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold transition hover:scale-105 shadow-sm" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                        {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                        <span>{isRunning ? "Pause" : "Start"}</span>
+                      </button>
+                      <button onClick={handleResetTimer} className="p-2 rounded-full" style={{ color: "var(--m-text-sub)" }} title="Reset"><RotateCcw size={14} /></button>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between text-[11px]" style={{ color: "var(--m-text-sub)" }}>
+                    <span>Presets:</span>
+                    <div className="flex gap-1">
+                      {[15, 25, 45, 60].map((m) => (
+                        <button key={m} onClick={() => changeTimerPreset(m)} className="px-2.5 py-1 rounded-lg text-xs font-bold transition feature-chip" style={timerPreset === m ? { backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" } : { backgroundColor: "var(--m-surface)", color: "var(--m-text-sub)", border: "1px solid var(--m-border-light)" }}>{m}m</button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* ═══════════ NOTES VIEW (ZERO-SETUP SUBJECT HUB) ═══════════ */}
+          {activeNav === "Notes" && (
+            <Suspense fallback={<div className="animate-pulse bg-black/5 dark:bg-white/5 h-96 rounded-2xl" />}>
+              <NotesTab
+                notes={notes}
+                subjects={subjects}
+                activeNote={activeNote}
+                noteSearchQuery={noteSearchQuery}
+                setNoteSearchQuery={setNoteSearchQuery}
+                noteSubjectFilter={noteSubjectFilter}
+                setNoteSubjectFilter={setNoteSubjectFilter}
+                noteCountBySubject={noteCountBySubject}
+                noteSubjectId={noteSubjectId}
+                handleSubjectChange={handleSubjectChange}
+                noteTitleDraft={noteTitleDraft}
+                handleTitleChange={handleTitleChange}
+                noteDraft={noteDraft}
+                handleContentChange={handleContentChange}
+                noteMode={noteMode}
+                setNoteMode={setNoteMode}
+                noteTextAreaRef={noteTextAreaRef}
+                isSummarizingNote={isSummarizingNote}
+                summarizeNoteWithAI={summarizeNoteWithAI}
+                handleOpenAIFlashcards={handleOpenAIFlashcards}
+                selectNote={selectNote}
+                createNewNote={createNewNote}
+                saveNote={saveNote}
+                deleteNote={deleteNote}
+                setNoteToShare={setNoteToShare}
+                setShareNoteModalOpen={setShareNoteModalOpen}
+                tasks={tasks}
+                scheduleItems={scheduleItems}
+                grades={grades}
+                flashcards={flashcards}
+                onStartFocusSession={startPomodoroForSubject}
+                onToggleTaskDone={toggleTask}
+              />
+            </Suspense>
+          )}
+
+          {/* ═══════════ GRADES VIEW ═══════════ */}
+          {activeNav === "Grades" && (
+            <section className="space-y-7 w-full min-w-0 max-w-full">
+              <div className="flex flex-wrap items-center justify-between gap-4 pb-4" style={{ borderBottom: "1px solid var(--m-border)" }}>
+                <div>
+                  <p className="font-[DM_Mono] text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--m-text-sub)" }}>Academic Performance</p>
+                  <h2 className="mt-1 font-[Roboto_Slab] text-3xl font-semibold" style={{ color: "var(--m-text-heading)" }}>Grade Tracker</h2>
+                </div>
+                {overallGPA > 0 && (
+                  <div className="rounded-2xl px-5 py-3 text-center feature-chip" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                    <p className="text-[10px] font-[DM_Mono] uppercase opacity-80">Overall Average</p>
+                    <p className="font-[Roboto_Slab] text-3xl font-bold">{overallGPA}%</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Add Grade Form */}
+              <form onSubmit={addGrade} className="rounded-[1.5rem] p-4 sm:p-5 shadow-xs feature-zoom w-full min-w-0 max-w-full" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                <p className="text-xs font-bold mb-3" style={{ color: "var(--m-text-heading)" }}>Record New Grade</p>
+                <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-5">
+                  <select value={gradeForm.subjectId} onChange={(e) => setGradeForm({ ...gradeForm, subjectId: Number(e.target.value) })} className="rounded-xl border px-3 py-2 text-xs outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} required>
+                    <option value={0}>Select Subject</option>
+                    {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                  <input value={gradeForm.name} onChange={(e) => setGradeForm({ ...gradeForm, name: e.target.value })} placeholder="Assignment name" className="rounded-xl border px-3 py-2 text-xs outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} required />
+                  <input type="number" value={gradeForm.score} onChange={(e) => setGradeForm({ ...gradeForm, score: e.target.value })} placeholder="Score" className="rounded-xl border px-3 py-2 text-xs outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} required />
+                  <input type="number" value={gradeForm.total} onChange={(e) => setGradeForm({ ...gradeForm, total: e.target.value })} placeholder="Out of" className="rounded-xl border px-3 py-2 text-xs outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} required />
+                  <button type="submit" className="rounded-xl px-4 py-2 text-xs font-bold transition hover:scale-105" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>Add</button>
+                </div>
+              </form>
+
+              {/* Grade Cards per Subject */}
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {subjects.map((sub) => {
+                  const subGrades = grades.filter((g) => g.subjectId === sub.id);
+                  const avg = subjectGPAs[sub.id] ?? 0;
+                  if (subGrades.length === 0) return null;
+                  return (
+                    <div key={sub.id} className="rounded-[1.5rem] p-5 shadow-xs feature-zoom" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="size-3 rounded-full" style={{ backgroundColor: sub.color }} />
+                          <h3 className="font-[Roboto_Slab] text-lg font-semibold" style={{ color: "var(--m-text-heading)" }}>{sub.name}</h3>
+                        </div>
+                        <span className="rounded-full px-3 py-1 text-xs font-bold" style={{ backgroundColor: avg >= 70 ? "#eef4ec" : "#fff0e9", color: avg >= 70 ? "#244c3b" : "#9a463f" }}>{avg}%</span>
+                      </div>
+                      <div className="space-y-2">
+                        {subGrades.map((g) => (
+                          <div key={g.id} className="flex items-center justify-between rounded-xl px-3 py-2 text-xs feature-chip" style={{ backgroundColor: "var(--m-surface-hover)", border: "1px solid var(--m-border-light)" }}>
+                            <span className="font-medium" style={{ color: "var(--m-text)" }}>{g.assignmentName}</span>
+                            <span className="font-[DM_Mono] font-bold" style={{ color: "var(--m-primary)" }}>{g.score}/{g.total}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {grades.length === 0 && (
+                <div className="rounded-[1.5rem] border border-dashed p-10 text-center" style={{ borderColor: "var(--m-border)" }}>
+                  <GraduationCap size={32} className="mx-auto" style={{ color: "var(--m-primary)" }} />
+                  <p className="mt-3 font-[Roboto_Slab] text-lg font-semibold" style={{ color: "var(--m-text-heading)" }}>No grades recorded yet</p>
+                  <p className="mt-1 text-xs" style={{ color: "var(--m-text-sub)" }}>Add your first assignment grade above to track your performance.</p>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* ═══════════ FLASHCARDS VIEW ═══════════ */}
+          {activeNav === "Cards" && (
+            <section className="space-y-7 w-full min-w-0 max-w-full">
+              <div className="flex flex-wrap items-center justify-between gap-4 pb-4" style={{ borderBottom: "1px solid var(--m-border)" }}>
+                <div>
+                  <p className="font-[DM_Mono] text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--m-text-sub)" }}>Spaced Repetition</p>
+                  <h2 className="mt-1 font-[Roboto_Slab] text-3xl font-semibold" style={{ color: "var(--m-text-heading)" }}>Flashcards</h2>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => handleOpenAIFlashcards({ subjectId: cardSubjectFilter })}
+                    className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold shadow-xs transition hover:scale-105 border"
+                    style={{
+                      backgroundColor: "var(--m-surface)",
+                      borderColor: "var(--m-primary)",
+                      color: "var(--m-primary)"
+                    }}
+                    title="Generate 15–20 active recall flashcards from any PDF, textbook note, or syllabus chapter"
+                  >
+                    <Sparkles size={14} className="text-amber-500 animate-pulse" />
+                    <span>⚡ 1-Click PDF to Flashcards</span>
+                  </button>
+                  <select value={cardSubjectFilter ?? ""} onChange={(e) => setCardSubjectFilter(e.target.value ? Number(e.target.value) : null)} className="rounded-xl border px-3 py-2 text-xs outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }}>
+                    <option value="">All Subjects</option>
+                    {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                  {studyCards.length > 0 && !studyingCards && (
+                    <button onClick={() => { setStudyingCards(true); setCurrentCardIndex(0); setCardFlipped(false); }} className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold shadow-xs transition hover:scale-105" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                      <Brain size={14} /><span>Study ({studyCards.length} cards)</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Study Mode */}
+              {studyingCards && studyCards.length > 0 && (
+                <div className="mx-auto max-w-lg">
+                  <div className="flex items-center justify-between mb-4 text-xs" style={{ color: "var(--m-text-sub)" }}>
+                    <span>Card {currentCardIndex + 1} of {studyCards.length}</span>
+                    <button onClick={() => setStudyingCards(false)} className="font-bold hover:opacity-80" style={{ color: "var(--m-danger)" }}>Exit Study</button>
+                  </div>
+                  <div className="h-2 rounded-full overflow-hidden mb-5" style={{ backgroundColor: "var(--m-border)" }}>
+                    <div className="h-full rounded-full transition-all duration-300" style={{ width: `${((currentCardIndex + 1) / studyCards.length) * 100}%`, backgroundColor: "var(--m-primary)" }} />
+                  </div>
+
+                  <button onClick={() => setCardFlipped(!cardFlipped)} className="w-full min-h-[280px] rounded-[2rem] p-8 text-center shadow-lg transition-all duration-500 hover:shadow-xl cursor-pointer feature-zoom" style={{ backgroundColor: cardFlipped ? "var(--m-primary)" : "var(--m-surface)", color: cardFlipped ? "var(--m-primary-text)" : "var(--m-text)", border: `2px solid ${cardFlipped ? "var(--m-primary)" : "var(--m-border)"}`, transform: cardFlipped ? "rotateY(0deg)" : "rotateY(0deg)" }}>
+                    <p className="font-[DM_Mono] text-[10px] uppercase tracking-[0.2em] opacity-60 mb-4">{cardFlipped ? "Answer" : "Question"}</p>
+                    <p className="font-[Roboto_Slab] text-xl font-semibold leading-8">{cardFlipped ? studyCards[currentCardIndex].back : studyCards[currentCardIndex].front}</p>
+                    {!cardFlipped && <p className="mt-6 text-xs opacity-50">Click to reveal answer</p>}
+                  </button>
+
+                  {cardFlipped && (
+                    <div className="mt-5 flex justify-center gap-3">
+                      {[
+                        { label: "Hard", difficulty: "hard" as const, color: "#e74c3c" },
+                        { label: "Medium", difficulty: "medium" as const, color: "#f39c12" },
+                        { label: "Easy", difficulty: "easy" as const, color: "#27ae60" },
+                      ].map(({ label, difficulty, color }) => (
+                        <button key={difficulty} onClick={() => markCardReviewed(difficulty)} className="rounded-xl px-5 py-2.5 text-xs font-bold transition hover:scale-105 shadow-sm" style={{ backgroundColor: color, color: "white" }}>{label}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Create Card Form */}
+              {!studyingCards && (
+                <>
+                  <form onSubmit={addFlashcard} className="rounded-[1.5rem] p-5 shadow-xs feature-zoom" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                    <p className="text-xs font-bold mb-3" style={{ color: "var(--m-text-heading)" }}>Create New Flashcard</p>
+                    <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-[1fr_1fr_1fr_auto]">
+                      <select value={cardForm.subjectId} onChange={(e) => setCardForm({ ...cardForm, subjectId: Number(e.target.value) })} className="rounded-xl border px-3 py-2 text-xs outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} required>
+                        <option value={0}>Select Subject</option>
+                        {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                      <input value={cardForm.front} onChange={(e) => setCardForm({ ...cardForm, front: e.target.value })} placeholder="Question / Front" className="rounded-xl border px-3 py-2 text-xs outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} required />
+                      <input value={cardForm.back} onChange={(e) => setCardForm({ ...cardForm, back: e.target.value })} placeholder="Answer / Back" className="rounded-xl border px-3 py-2 text-xs outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} required />
+                      <button type="submit" className="rounded-xl px-4 py-2 text-xs font-bold transition hover:scale-105" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>Create</button>
+                    </div>
+                  </form>
+
+                  {/* Card Grid */}
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {studyCards.map((card) => {
+                      const sub = subjects.find((s) => s.id === card.subjectId);
+                      return (
+                        <div key={card.id} className="group rounded-[1.5rem] p-5 shadow-xs transition hover:shadow-md feature-zoom" style={{ backgroundColor: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
+                          <div className="flex items-center justify-between mb-3">
+                            {sub && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ backgroundColor: sub.color + "40", color: "var(--m-text-heading)" }}>{sub.name}</span>}
+                            <button onClick={() => setFlashcards((c) => c.filter((x) => x.id !== card.id))} className="opacity-0 group-hover:opacity-100 p-1 rounded-lg transition" style={{ color: "var(--m-danger)" }}><Trash2 size={14} /></button>
+                          </div>
+                          <p className="text-sm font-bold" style={{ color: "var(--m-text-heading)" }}>{card.front}</p>
+                          <p className="mt-2 text-xs" style={{ color: "var(--m-text-sub)" }}>{card.back}</p>
+                          <p className="mt-3 text-[10px] font-[DM_Mono]" style={{ color: "var(--m-text-muted)" }}>Reviewed {card.reviewCount}x</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {flashcards.length === 0 && (
+                    <div className="rounded-[1.5rem] border border-dashed p-10 text-center" style={{ borderColor: "var(--m-border)" }}>
+                      <Layers size={32} className="mx-auto" style={{ color: "var(--m-primary)" }} />
+                      <p className="mt-3 font-[Roboto_Slab] text-lg font-semibold" style={{ color: "var(--m-text-heading)" }}>No flashcards yet</p>
+                      <p className="mt-1 text-xs" style={{ color: "var(--m-text-sub)" }}>Create your first flashcard above or ask AI to generate them!</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </section>
+          )}
+        </div>
+      </section>
+
+      {/* ─── Mobile Bottom Navigation Dock (Optimized for 1-Thumb Reach) ─── */}
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-30 flex items-center justify-around px-1 sm:px-2 py-1 sm:py-1.5 border-t lg:hidden pb-safe minimal-surface shadow-2xl"
+        style={{
+          backgroundColor: "var(--m-surface-solid)",
+          borderColor: "var(--m-border-light)",
+        }}
+      >
+        {[
+          { label: "Today", icon: Sun, display: "Today" },
+          { label: "Planner", icon: CalendarDays, display: "Plan" },
+          { label: "Notes", icon: Notebook, display: "Notes" },
+        ].map(({ label, icon: Icon, display }) => {
+          const isActive = activeNav === label;
+          return (
+            <button
+              key={label}
+              onClick={() => {
+                setActiveNav(label as any);
+                setMobileOpen(false);
+              }}
+              className={`flex flex-col items-center justify-center gap-0.5 rounded-xl py-1 px-1 sm:px-2.5 transition-all min-w-0 flex-1 max-w-[76px] min-h-[44px] ${
+                isActive ? "font-bold" : "opacity-75"
+              }`}
+              style={{
+                color: isActive ? "var(--m-primary)" : "var(--m-text-sub)",
+                backgroundColor: isActive ? "var(--m-surface-alt)" : "transparent",
+              }}
+            >
+              <Icon size={18} />
+              <span className="text-[10px] tracking-tight">{display}</span>
+            </button>
+          );
+        })}
+
+        {/* AI Tutor One-Tap Button */}
+        <button
+          onClick={() => setIsChatMaximized(true)}
+          className="flex flex-col items-center justify-center gap-0.5 rounded-xl py-1 px-1 sm:px-2.5 transition-all min-w-0 flex-1 max-w-[76px] min-h-[44px]"
+          style={{ color: "var(--m-primary)" }}
+        >
+          <div
+            className="grid size-6 place-items-center rounded-lg shadow-xs"
+            style={{
+              backgroundColor: "var(--m-primary)",
+              color: "var(--m-primary-text)",
+            }}
+          >
+            <Brain size={13} />
+          </div>
+          <span className="text-[10px] font-bold tracking-tight">AI Tutor</span>
+        </button>
+
+        {/* More / Menu Drawer Toggle */}
+        <button
+          onClick={() => setMobileOpen(true)}
+          className="flex flex-col items-center justify-center gap-0.5 rounded-xl py-1 px-1 sm:px-2.5 transition-all min-w-0 flex-1 max-w-[76px] min-h-[44px] opacity-75"
+          style={{ color: "var(--m-text-sub)" }}
+        >
+          <Menu size={18} />
+          <span className="text-[10px] tracking-tight">More</span>
+        </button>
+      </nav>
+
+      {/* ═══════════ MODALS ═══════════ */}
+
+      {/* Subject Create/Edit Modal */}
+      {(subjectsOpen || editingSubject) && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/60 animate-in fade-in duration-200">
+          <div className="w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden rounded-2xl md:rounded-3xl minimal-surface shadow-2xl animate-in zoom-in-95 duration-200" style={{ backgroundColor: "var(--m-surface-solid)", color: "var(--m-text)", border: "1px solid var(--m-border)" }}>
+            <div className="flex items-start justify-between p-4 sm:p-6 shrink-0" style={{ borderBottom: "1px solid var(--m-border-light)" }}>
+              <div>
+                <p className="font-[DM_Mono] text-[10px] uppercase tracking-[0.16em]" style={{ color: "var(--m-text-sub)" }}>Subject Management</p>
+                <h2 className="mt-1 font-[Roboto_Slab] text-xl sm:text-2xl font-semibold" style={{ color: "var(--m-text-heading)" }}>{editingSubject ? `Edit "${editingSubject.name}"` : "Create New Subject"}</h2>
+              </div>
+              <button onClick={() => { setSubjectsOpen(false); setEditingSubject(null); }} className="rounded-full p-2 hover:opacity-75"><X size={20} /></button>
+            </div>
+            <div className="p-4 sm:p-6 space-y-5 flex-1 overflow-y-auto custom-scrollbar">
+              {editingSubject ? (
+                <form onSubmit={updateSubject} className="space-y-4">
+                  <label className="block text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Subject Name
+                    <input value={editingSubject.name} onChange={(e) => setEditingSubject({ ...editingSubject, name: e.target.value })} className="mt-1.5 w-full rounded-xl border px-3.5 py-2 text-sm outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} required />
+                  </label>
+                  <label className="block text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Description
+                    <input value={editingSubject.description || ""} onChange={(e) => setEditingSubject({ ...editingSubject, description: e.target.value })} className="mt-1.5 w-full rounded-xl border px-3.5 py-2 text-sm outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} />
+                  </label>
+                  <p className="text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Color Swatch</p>
+                  <div className="flex flex-wrap gap-2">
+                    {["#c8d9e9", "#f2cf91", "#b9d6c0", "#e2d6ee", "#f0b9a8", "#d97706", "#f87171", "#7dd3fc"].map((col) => (
+                      <button type="button" key={col} onClick={() => setEditingSubject({ ...editingSubject, color: col })} className={`size-8 rounded-full border-2 transition ${editingSubject.color === col ? "scale-110" : ""}`} style={{ backgroundColor: col, borderColor: editingSubject.color === col ? "var(--m-primary)" : "transparent" }} />
+                    ))}
+                  </div>
+                  <div className="flex justify-end gap-2 pt-4" style={{ borderTop: "1px solid var(--m-border-light)" }}>
+                    <button type="button" onClick={() => setEditingSubject(null)} className="rounded-xl border px-4 py-2 text-xs font-bold" style={{ borderColor: "var(--m-border)", color: "var(--m-text-sub)" }}>Cancel</button>
+                    <button type="submit" className="rounded-xl px-4 py-2 text-xs font-bold" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>Save Subject</button>
+                  </div>
+                </form>
+              ) : (
+                <form onSubmit={addSubject} className="space-y-4">
+                  <label className="block text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Subject Name
+                    <input value={subjectDraft} onChange={(e) => setSubjectDraft(e.target.value)} placeholder="e.g. Mathematics, Organic Chemistry, World History" className="mt-1.5 w-full rounded-xl border px-3.5 py-2.5 text-sm outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} required />
+                  </label>
+                  <label className="block text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Description (Optional)
+                    <input value={subjectDesc} onChange={(e) => setSubjectDesc(e.target.value)} placeholder="e.g. Course syllabus, exams, assignments" className="mt-1.5 w-full rounded-xl border px-3.5 py-2 text-sm outline-none" style={{ borderColor: "var(--m-border)", backgroundColor: "var(--m-input-bg)", color: "var(--m-text)" }} />
+                  </label>
+                  <p className="text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Color Swatch</p>
+                  <div className="flex flex-wrap gap-2">
+                    {["#c8d9e9", "#f2cf91", "#b9d6c0", "#e2d6ee", "#f0b9a8", "#d97706", "#f87171", "#7dd3fc"].map((col) => (
+                      <button type="button" key={col} onClick={() => setSubjectColor(col)} className={`size-8 rounded-full border-2 transition ${subjectColor === col ? "scale-110" : ""}`} style={{ backgroundColor: col, borderColor: subjectColor === col ? "var(--m-primary)" : "transparent" }} />
+                    ))}
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button type="button" onClick={() => setSubjectsOpen(false)} className="rounded-xl border px-4 py-2 text-xs font-bold" style={{ borderColor: "var(--m-border)", color: "var(--m-text-sub)" }}>Cancel</button>
+                    <button type="submit" disabled={!subjectDraft.trim()} className="rounded-xl px-4 py-2 text-xs font-bold disabled:opacity-50" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>Create Subject</button>
+                  </div>
+                </form>
+              )}
+
+              {/* Existing Subjects List */}
+              {subjects.length > 0 && !editingSubject && (
+                <div className="pt-4 space-y-3" style={{ borderTop: "1px solid var(--m-border-light)" }}>
+                  <p className="text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Your Active Subjects ({subjects.length})</p>
+                  <div className="max-h-48 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                    {subjects.map((sub) => (
+                      <div key={sub.id} className="flex items-center justify-between rounded-xl p-3 text-xs" style={{ backgroundColor: "var(--m-surface-alt)", border: "1px solid var(--m-border-light)" }}>
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <span className="size-3 rounded-full shrink-0" style={{ backgroundColor: sub.color }} />
+                          <div className="min-w-0 flex-1">
+                            <p className="font-bold truncate" style={{ color: "var(--m-text-heading)" }}>{sub.name}</p>
+                            {sub.description && <p className="text-[10px] truncate opacity-70" style={{ color: "var(--m-text-sub)" }}>{sub.description}</p>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                          <button type="button" onClick={() => setEditingSubject(sub)} className="p-1.5 rounded-lg hover:opacity-80 transition" style={{ color: "var(--m-primary)" }} title="Edit Subject">
+                            <Sparkles size={14} />
+                          </button>
+                          <button type="button" onClick={() => deleteSubject(sub.id)} className="p-1.5 rounded-lg hover:opacity-80 transition" style={{ color: "var(--m-danger)" }} title="Delete Subject">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+
+
+      {/* Files Modal */}
+      {filesModalSubject && (
+        <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-black/60 animate-in fade-in duration-200">
+          <div className="w-full max-w-2xl rounded-[1.5rem] p-6 shadow-2xl max-h-[90vh] flex flex-col overflow-hidden minimal-surface" style={{ border: "1px solid var(--m-border)", backgroundColor: "var(--m-surface-solid)", color: "var(--m-text)" }}>
+            <div className="flex items-start justify-between pb-4 shrink-0" style={{ borderBottom: "1px solid var(--m-border-light)" }}>
+              <div className="flex items-center gap-3">
+                <div className="grid size-11 place-items-center rounded-2xl shadow-xs" style={{ backgroundColor: filesModalSubject.color }}><Folder size={24} style={{ color: "var(--m-primary)" }} /></div>
+                <div>
+                  <h2 className="font-[Roboto_Slab] text-xl font-bold" style={{ color: "var(--m-text-heading)" }}>{filesModalSubject.name} — Files</h2>
+                  <p className="text-xs" style={{ color: "var(--m-text-sub)" }}>Upload and manage attachments</p>
+                </div>
+              </div>
+              <button onClick={() => setFilesModalSubject(null)} className="p-1.5 rounded-xl hover:opacity-75"><X size={20} /></button>
+            </div>
+            <div className="mt-5 flex-1 overflow-y-auto space-y-6 pr-1">
+              <div>
+                <p className="text-xs font-bold mb-2" style={{ color: "var(--m-text-heading)" }}>Upload (Max 25MB)</p>
+                <FileUpload accessToken={accessToken} userId={userId} subjectId={filesModalSubject.id} onUploadSuccess={handleUploadSuccess} allowAutopilot={true} />
+              </div>
+              <div>
+                <h3 className="font-[Roboto_Slab] text-base font-semibold mb-3" style={{ color: "var(--m-text-heading)" }}>Files ({attachedFiles.filter((f) => f.subjectId === filesModalSubject.id).length})</h3>
+                {attachedFiles.filter((f) => f.subjectId === filesModalSubject.id).length ? (
+                  <div className="grid gap-3">
+                    {attachedFiles.filter((f) => f.subjectId === filesModalSubject.id).map((file) => (
+                      <div key={file.id} className="flex items-center justify-between rounded-2xl p-3.5 shadow-2xs" style={{ border: "1px solid var(--m-border)", backgroundColor: "var(--m-surface-hover)" }}>
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className="grid size-10 shrink-0 place-items-center rounded-xl" style={{ backgroundColor: "var(--m-surface-alt)", color: "var(--m-primary)" }}>
+                            {file.mimeType.includes("image") ? <ImageIcon size={18} /> : file.mimeType.includes("pdf") ? <FileText size={18} /> : <Paperclip size={18} />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>{file.fileName}</p>
+                            <p className="text-[11px]" style={{ color: "var(--m-text-sub)" }}>Uploaded {new Date(file.createdAt).toLocaleDateString()}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 ml-3">
+                          <button
+                            onClick={() => handleOpenAIFlashcards({ file, subjectId: filesModalSubject.id })}
+                            className="flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold transition hover:scale-105 border shadow-2xs"
+                            style={{
+                              borderColor: "var(--m-primary)",
+                              color: "var(--m-primary)",
+                              backgroundColor: "var(--m-surface)"
+                            }}
+                            title="Generate active-recall flashcards & chapter summary from this file"
+                          >
+                            <Sparkles size={13} className="text-amber-500" />
+                            <span>AI Cards</span>
+                          </button>
+                          <button onClick={() => handleDownloadFile(file)} className="flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs font-bold transition hover:scale-105" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}><Download size={14} />Download</button>
+                          <button onClick={() => handleDeleteFile(file)} className="p-1.5 rounded-xl transition" style={{ color: "var(--m-danger)" }}><Trash2 size={16} /></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed p-6 text-center" style={{ borderColor: "var(--m-border)" }}>
+                    <Paperclip size={24} className="mx-auto mb-2" style={{ color: "var(--m-text-muted)" }} />
+                    <p className="text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>No files yet</p>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="mt-4 pt-3 flex justify-end shrink-0" style={{ borderTop: "1px solid var(--m-border-light)" }}>
+              <button onClick={() => setFilesModalSubject(null)} className="rounded-xl px-4 py-2 text-xs font-bold" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Share Note Modal ─── */}
+      {shareNoteModalOpen && noteToShare && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-3xl p-6 shadow-2xl" style={{ backgroundColor: "var(--m-surface)", color: "var(--m-text)" }}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold font-[Roboto_Slab]">Share Note</h3>
+              <button onClick={() => setShareNoteModalOpen(false)} className="p-1.5 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition">
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-xs mb-4 opacity-80">
+              Sharing: <span className="font-bold">{noteToShare.title || "Untitled"}</span>
+            </p>
+            {friends.length === 0 ? (
+              <div className="py-6 text-center opacity-60">
+                <p className="text-xs mb-4">You need to add friends before you can share notes.</p>
+                <button onClick={() => { setShareNoteModalOpen(false); setFriendsModalOpen(true); }} className="px-4 py-2 rounded-xl text-xs font-bold transition hover:opacity-80" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                  Find Friends
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleShareNoteSubmit} className="space-y-4">
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider mb-1.5 block opacity-70">Select Friend</label>
+                  <select
+                    required
+                    value={shareRecipientIdentifier}
+                    onChange={(e) => setShareRecipientIdentifier(e.target.value)}
+                    className="w-full rounded-xl border p-3 text-xs focus:outline-none focus:ring-2 bg-transparent"
+                    style={{ borderColor: "var(--m-border-light)", color: "var(--m-text)" }}
+                  >
+                    <option value="" disabled style={{ color: "black" }}>Choose a mutual friend...</option>
+                    {friends.map(f => {
+                      const friendName = f.requester_id === userId 
+                        ? f.target_actual_identifier || f.target_identifier 
+                        : f.requester_identifier;
+                      return <option key={f.id} value={friendName} style={{ color: "black" }}>{friendName}</option>;
+                    })}
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  disabled={isSharing || !shareRecipientIdentifier.trim()}
+                  className="w-full rounded-xl py-3 text-xs font-bold transition flex items-center justify-center gap-2"
+                  style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}
+                >
+                  {isSharing ? "Sending..." : "Send Note"}
+                  <Send size={14} />
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Inbox Modal ─── */}
+      <InboxModal
+        isOpen={inboxOpen}
+        onClose={() => setInboxOpen(false)}
+        pendingShares={pendingShares}
+        pendingFriendRequests={pendingFriendRequests}
+        onAcceptFriendRequest={handleAcceptFriendRequest}
+        onDeclineFriendRequest={handleDeclineFriendRequest}
+        onAcceptShare={handleAcceptShare}
+        onDeclineShare={handleDeclineShare}
+      />
+
+      {/* ─── Friends Modal ─── */}
+      <FriendsModal
+        isOpen={friendsModalOpen}
+        onClose={() => setFriendsModalOpen(false)}
+        friends={friends}
+        userId={userId}
+        addFriendDraft={addFriendDraft}
+        setAddFriendDraft={setAddFriendDraft}
+        isAddingFriend={isAddingFriend}
+        onSendFriendRequest={handleSendFriendRequest}
+        onDeleteFriend={handleDeleteFriend}
+      />
+
+      {/* Toast Notification */}
+      {/* ─── Theme Selector Modal ─── */}
+      <ThemeSelector isOpen={themeSelectorOpen} onClose={() => setThemeSelectorOpen(false)} />
+
+      {toast && (
+        <div className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-2xl px-4 py-3 text-xs font-bold shadow-xl animate-in fade-in slide-in-from-bottom-3 ${toast.type === "error" ? "bg-[#e74c3c] text-white" : toast.type === "info" ? "bg-[#3498db] text-white" : ""
+          }`} style={toast.type === "success" ? { backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" } : {}}>
+          {toast.type === "success" && <CheckCircle2 size={16} />}
+          {toast.type === "error" && <AlertCircle size={16} />}
+          {toast.type === "info" && <Sparkles size={16} />}
+          <span>{toast.message}</span>
+        </div>
+      )}
+
+      {/* ─── Desktop Notification Permission Banner ─── */}
+      {showNotifBanner && (
+        <div
+          className="fixed bottom-6 right-6 z-50 max-w-sm rounded-2xl p-4 shadow-2xl border backdrop-blur-md animate-in fade-in slide-in-from-bottom-4 duration-200 flex items-start gap-3.5"
+          style={{
+            backgroundColor: "var(--m-surface-solid)",
+            borderColor: "var(--m-border)",
+            color: "var(--m-text)",
+          }}
+        >
+          <div className="size-9 rounded-xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0">
+            <Bell size={20} className="animate-bounce" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h4 className="text-xs font-bold font-[Roboto_Slab]">Get alerts when phone is locked?</h4>
+            <p className="text-[11px] opacity-75 mt-0.5 leading-snug">
+              Turn on notifications to get instant message alerts on your lock screen (Android, Windows, or macOS).
+            </p>
+            <div className="flex items-center gap-2 mt-2.5">
+              <button
+                type="button"
+                onClick={handleEnableNotifications}
+                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition cursor-pointer"
+              >
+                Turn On
+              </button>
+              <button
+                type="button"
+                onClick={handleDismissNotifBanner}
+                className="px-2.5 py-1.5 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 opacity-70 hover:opacity-100 text-xs font-semibold transition cursor-pointer"
+              >
+                Not Now
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleDismissNotifBanner}
+            className="p-1 rounded-lg opacity-60 hover:opacity-100 transition shrink-0 cursor-pointer -mr-1 -mt-1"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
+
+      {/* ─── Chat Modal ─── */}
+      {chatModalOpen && (
+        <ChatModal
+          userId={userId}
+          userNameDisplay={userNameDisplay}
+          friends={friends}
+          initialFriendId={chatInitialFriendId}
+          onClose={() => {
+            setChatModalOpen(false);
+            setChatInitialFriendId(null);
+          }}
+          onStartCall={(friendId, friendName, friendImage, callType) => {
+            callManager.startCall(friendId, friendName, friendImage, callType);
+          }}
+          onRefreshUnreadCount={async () => {
+            if (userId) {
+              const count = await fetchUnreadMessageCount(userId);
+              setUnreadMessageCount(count);
+            }
+          }}
+        />
+      )}
+
+      {/* ─── P2P WebRTC Calling (Zero Storage) ─── */}
+      {callManager.incomingCall && (
+        <IncomingCallModal
+          incomingCall={callManager.incomingCall}
+          onAccept={callManager.acceptCall}
+          onDecline={callManager.declineCall}
+        />
+      )}
+
+      {(callManager.callState === "connected" || callManager.callState === "outgoing_ringing") && callManager.activeSession && (
+        <ActiveCallOverlay
+          session={callManager.activeSession}
+          callState={callManager.callState}
+          localStream={callManager.localStream}
+          remoteStream={callManager.remoteStream}
+          isMuted={callManager.isMuted}
+          isVideoOff={callManager.isVideoOff}
+          isScreenSharing={callManager.isScreenSharing}
+          remoteHasVideo={callManager.remoteHasVideo}
+          remoteIsScreenSharing={callManager.remoteIsScreenSharing}
+          remoteIsMuted={callManager.remoteIsMuted}
+          handRaised={callManager.handRaised}
+          remoteHandRaised={callManager.remoteHandRaised}
+          reactions={callManager.reactions}
+          myUserName={userNameDisplay}
+          onEndCall={callManager.endCall}
+          onToggleMute={callManager.toggleMute}
+          onToggleVideo={callManager.toggleVideo}
+          onToggleScreenShare={callManager.toggleScreenShare}
+          onSendReaction={callManager.sendReaction}
+          onToggleHandRaise={callManager.toggleHandRaise}
+          inCallMessages={callManager.inCallMessages}
+          onSendInCallMessage={callManager.sendInCallMessage}
+          onChangeAudioInput={callManager.changeAudioInput}
+          onChangeVideoInput={callManager.changeVideoInput}
+        />
+      )}
+
+      {/* ─── Profile Modal ─── */}
+      <Suspense fallback={null}>
+        <UserProfileModal isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} />
+      </Suspense>
+
+      {/* ─── Account Switcher Modal ─── */}
+      <Suspense fallback={null}>
+        <AccountSwitcherModal
+          isOpen={accountSwitcherOpen}
+          onClose={() => setAccountSwitcherOpen(false)}
+          currentUserId={userId}
+          currentUserName={userNameDisplay}
+          currentUserEmail={userEmail}
+          currentUserImageUrl={userImageUrl}
+          onSignOut={onSignOut}
+        />
+      </Suspense>
+
+      {/* ─── Sign Out Confirmation Modal ─── */}
+      {showSignOutConfirm && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-200"
+          onClick={() => setShowSignOutConfirm(false)}
+        >
+          <div 
+            className="relative w-full max-w-sm rounded-3xl p-6 sm:p-7 shadow-2xl border flex flex-col items-center text-center animate-in zoom-in-95 duration-200"
+            style={{ 
+              backgroundColor: "var(--m-surface)", 
+              borderColor: "var(--m-border)",
+              color: "var(--m-text)"
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close Button */}
+            <button
+              onClick={() => setShowSignOutConfirm(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition opacity-50 hover:opacity-100"
+              aria-label="Close"
+            >
+              <X size={18} />
+            </button>
+
+            {/* Danger Icon Badge */}
+            <div 
+              className="size-14 rounded-2xl flex items-center justify-center mb-4"
+              style={{ 
+                backgroundColor: "color-mix(in srgb, var(--m-danger) 12%, transparent)",
+                color: "var(--m-danger)",
+                border: "1px solid color-mix(in srgb, var(--m-danger) 25%, transparent)"
+              }}
+            >
+              <LogOut size={24} className="translate-x-0.5" />
+            </div>
+
+            {/* Heading */}
+            <h3 className="text-lg font-bold font-[Roboto_Slab] mb-1.5" style={{ color: "var(--m-text-heading)" }}>
+              Do you want to sign out?
+            </h3>
+
+            {/* Description */}
+            <p className="text-xs opacity-70 mb-6 leading-relaxed max-w-[270px]">
+              Are you sure you want to end your session? You can sign back in anytime to continue your study sessions.
+            </p>
+
+            {/* Actions */}
+            <div className="flex items-center gap-3 w-full">
+              <button
+                type="button"
+                onClick={() => setShowSignOutConfirm(false)}
+                className="flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold border transition hover:opacity-80 active:scale-95"
+                style={{ 
+                  backgroundColor: "var(--m-surface-alt)", 
+                  borderColor: "var(--m-border)", 
+                  color: "var(--m-text)" 
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSignOutConfirm(false);
+                  onSignOut();
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold text-white transition hover:opacity-90 active:scale-95 flex items-center justify-center gap-1.5"
+                style={{ 
+                  backgroundColor: "var(--m-danger)"
+                }}
+              >
+                <LogOut size={13} />
+                Sign out
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowSignOutConfirm(false);
+                setAccountSwitcherOpen(true);
+              }}
+              className="w-full mt-3 py-2.5 px-3 rounded-xl border text-xs font-semibold transition hover:opacity-90 flex items-center justify-center gap-1.5 cursor-pointer"
+              style={{
+                borderColor: "var(--m-border)",
+                color: "var(--m-primary)",
+                backgroundColor: "color-mix(in srgb, var(--m-primary) 8%, transparent)",
+              }}
+            >
+              <ArrowRightLeft size={13} />
+              <span>Switch to another account instead</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Floating AI Bot Button for Narrow Desktop/Tablet (Bottom Right Corner) ─── */}
+      {!isChatMaximized && (
+        <button
+          onClick={() => setIsChatMaximized(true)}
+          className="hidden lg:flex xl:hidden fixed bottom-6 right-6 z-40 items-center gap-2.5 rounded-2xl px-4 py-3 text-xs sm:text-sm font-bold shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 animate-in fade-in slide-in-from-bottom-3"
+          style={{
+            backgroundColor: "var(--m-primary)",
+            color: "var(--m-primary-text)",
+            boxShadow: "0 8px 32px color-mix(in srgb, var(--m-primary) 45%, transparent), 0 2px 8px rgba(0,0,0,0.3)",
+          }}
+          aria-label="Open Dream It AI"
+        >
+          <div className="size-6 rounded-lg bg-white/20 flex items-center justify-center shrink-0">
+            <Brain size={16} />
+          </div>
+          <span>Dream It AI</span>
+          <span className="size-2 rounded-full bg-emerald-400 animate-pulse ml-0.5" />
+        </button>
+      )}
+
+      {/* ─── 1-Click PDF to Flashcards & Summary Generator Modal ─── */}
+      {pdfFlashcardModalOpen && (
+        <Suspense fallback={null}>
+          <PDFFlashcardModal
+            isOpen={pdfFlashcardModalOpen}
+            onClose={() => setPdfFlashcardModalOpen(false)}
+            subjects={subjects}
+            userNotes={notes}
+            attachedFiles={attachedFiles}
+            initialFile={pdfModalFile}
+            initialNote={pdfModalNote}
+            initialSubjectId={pdfModalSubjectId}
+            onAddFlashcards={handleAddAIFlashcards}
+            onSaveNote={handleSaveSummaryNote}
+            onAddXP={(amt) => addXP(amt)}
+            showToast={showToast}
+          />
+        </Suspense>
+      )}
+
+      {/* ─── PWA Install Banner ─── */}
+      <PWAInstallBanner />
+
+      {/* ─── Multimodal Snap & Solve Modal ─── */}
+      {snapModalOpen && (
+        <Suspense fallback={null}>
+          <SnapAndSolveModal
+            isOpen={snapModalOpen}
+            onClose={() => setSnapModalOpen(false)}
+            subjects={subjects}
+            defaultSubjectId={chatSubjectId || subjects[0]?.id}
+            onSaveToNotes={(title, content, subjectId) => {
+              const targetSubId = subjectId || subjects[0]?.id || 1;
+              const newNote: NoteEntry = {
+                id: `note_${Date.now()}`,
+                subjectId: targetSubId,
+                title,
+                content,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              };
+              setNotes((curr) => [newNote, ...curr]);
+              showToast("Problem solution saved to Notes! 📝");
+              addXP(15);
+            }}
+            onSaveToFlashcard={(front, back, subjectId) => {
+              const targetSubId = subjectId || subjects[0]?.id || 1;
+              const newCard: Flashcard = {
+                id: `card_${Date.now()}`,
+                subjectId: targetSubId,
+                front,
+                back,
+                difficulty: "medium",
+                reviewCount: 0,
+                createdAt: new Date().toISOString(),
+              };
+              setFlashcards((curr) => [newCard, ...curr]);
+              showToast("Created active recall Flashcard! 🎴");
+              addXP(15);
+            }}
+            onAskFollowUp={(prompt, image) => {
+              setChatDraft(prompt);
+              if (image) {
+                setChatFile({
+                  id: `snap_${Date.now()}`,
+                  name: image.name,
+                  size: Math.round(image.base64Data.length * 0.75),
+                  type: image.mimeType,
+                  content: "[Image of homework problem]",
+                  isImage: true,
+                  dataUrl: image.dataUrl,
+                  base64: image.base64Data,
+                });
+              }
+              showToast("Problem context added to Study Coach! ✨");
+            }}
+          />
+        </Suspense>
+      )}
+
+      {/* ─── Global Command Palette (Cmd + K) ─── */}
+      <CommandPalette
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        activeNav={activeNav}
+        onNavigate={(nav) => {
+          setActiveNav(nav);
+          setMobileOpen(false);
+        }}
+        onStartPomodoro={(minutes, subjectName) => {
+          const sub = subjectName || (selectedSubject !== "All subjects" ? selectedSubject : (subjects[0]?.name || "General"));
+          startPomodoroForSubject(sub, minutes);
+          setActiveNav("Focus");
+        }}
+        onCreateTask={(title) => {
+          const assignedCourse = selectedSubject !== "All subjects" ? selectedSubject : (subjects[0]?.name || "General");
+          const newTask: Task = {
+            id: Date.now(),
+            title: title.trim(),
+            course: assignedCourse,
+            time: "Today",
+            done: false,
+            color: "bg-blue-500",
+            priority: "medium",
+            createdAt: new Date().toISOString(),
+          };
+          setTasks((curr) => [newTask, ...curr]);
+          addXP(5);
+          updateDailyStreak();
+          showToast(`Task added: "${title.trim()}" (+5 XP) 📝`);
+        }}
+        onSearchNoteSelect={(note) => {
+          setActiveNote(note);
+          setActiveNav("Notes");
+          showToast(`Opened "${note.title || "Note"}" 📖`);
+        }}
+        onAskAI={(question) => {
+          setIsChatMaximized(true);
+          askCoach(undefined, question);
+        }}
+        onOpenSnapAndSolve={() => setSnapModalOpen(true)}
+        onOpenFriends={() => setFriendsModalOpen(true)}
+        onOpenMessages={() => {
+          setChatModalOpen(true);
+          checkInbox();
+        }}
+        onOpenInbox={() => setInboxOpen(true)}
+        onOpenThemeSelector={() => setThemeSelectorOpen(true)}
+        onOpenSubjectsModal={() => setSubjectsOpen(true)}
+        onOpenAutopilotSyllabus={() => {
+          setAutopilotMode("syllabus");
+          setActiveNav("Today");
+          setTimeout(() => {
+            document.getElementById("autopilot-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 100);
+        }}
+        notes={notes}
+        tasks={tasks}
+        subjects={subjects}
+      />
+
+      {/* ─── Full Screen Wide Angle AI Fullscreen Overlay ─── */}
+      {isChatMaximized && (
+        <div
+          onDragEnter={handleChatDragEnter}
+          onDragOver={handleChatDragOver}
+          onDragLeave={handleChatDragLeave}
+          onDrop={handleChatDrop}
+          onPaste={handleChatPaste}
+          className="fixed inset-0 z-50 flex flex-col w-full h-full h-[100dvh] p-0 m-0 overflow-hidden minimal-surface animate-in fade-in duration-200"
+          style={{ backgroundColor: "var(--m-surface-solid)", color: "var(--m-text)" }}
+        >
+          {/* Fullscreen Drag & Drop Visual Overlay */}
+          {isChatDraggingOver && (
+            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center pointer-events-none bg-indigo-500/10 backdrop-blur-md border-4 border-dashed border-indigo-500 rounded-none animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex flex-col items-center gap-3 p-8 rounded-3xl bg-white/90 dark:bg-slate-900/90 shadow-2xl border border-indigo-500/20 text-center">
+                <div className="size-16 rounded-2xl bg-indigo-500/15 flex items-center justify-center text-indigo-500 animate-bounce">
+                  <Paperclip size={32} />
+                </div>
+                <div>
+                  <p className="text-base font-bold" style={{ color: "var(--m-text-heading)" }}>Drop your PDF or image here</p>
+                  <p className="text-xs mt-1" style={{ color: "var(--m-text-sub)" }}>Dream It AI will automatically analyze the contents</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Fullscreen Header (Responsive: streamlined for smartphone, expansive for desktop) */}
+          <div className="flex items-center justify-between border-b px-3 sm:px-6 py-2.5 sm:py-3 shrink-0 gap-2" style={{ borderColor: "var(--m-border)" }}>
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setWideSidebarOpen(!wideSidebarOpen)}
+                className={`p-2 rounded-xl border transition hover:opacity-80 flex items-center justify-center shadow-xs shrink-0 ${
+                  wideSidebarOpen ? "bg-[var(--m-primary)]/15 border-[var(--m-primary)]/40 text-[var(--m-primary)]" : ""
+                }`}
+                style={{
+                  borderColor: wideSidebarOpen ? undefined : "var(--m-border)",
+                  backgroundColor: wideSidebarOpen ? undefined : "var(--m-surface-alt)",
+                  color: wideSidebarOpen ? undefined : "var(--m-text)",
+                }}
+                title={wideSidebarOpen ? "Hide chat history" : "Show chat history"}
+                aria-label="Toggle chat history"
+              >
+                <PanelLeft size={17} />
+              </button>
+              <div className="flex size-8 sm:size-9 items-center justify-center rounded-xl shadow-xs shrink-0" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                <Brain size={18} className="sm:hidden" />
+                <Brain size={20} className="hidden sm:block" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <h2 className="font-[Roboto_Slab] text-sm sm:text-base md:text-lg font-bold truncate leading-tight" style={{ color: "var(--m-text-heading)" }}>Dream It AI Tutor</h2>
+                  <span className="hidden md:inline-block rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider shadow-xs shrink-0" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>Wide Screen</span>
+                </div>
+                <p className="hidden sm:block text-[11px] truncate" style={{ color: "var(--m-text-sub)" }}>
+                  Ready for full-screen study assistance
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              {/* Desktop New Chat button */}
+              <button
+                type="button"
+                onClick={handleNewChat}
+                className="hidden sm:flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition hover:scale-102 shadow-xs shrink-0"
+                style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}
+                title="Start a new chat (Ctrl+N)"
+              >
+                <Plus size={14} />
+                <span>New Chat</span>
+              </button>
+
+              {/* Mobile New Chat icon button */}
+              <button
+                type="button"
+                onClick={() => {
+                  handleNewChat();
+                  if (typeof window !== "undefined" && window.innerWidth < 768) {
+                    setWideSidebarOpen(false);
+                  }
+                }}
+                className="sm:hidden flex items-center justify-center size-8 rounded-xl transition hover:opacity-85 shadow-xs shrink-0"
+                style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}
+                title="Start a new chat"
+                aria-label="New Chat"
+              >
+                <Plus size={16} />
+              </button>
+
+              {/* Desktop Exit Wide button */}
+              <button
+                type="button"
+                onClick={() => setIsChatMaximized(false)}
+                className="hidden sm:flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition hover:scale-105 minimal-surface shadow-xs shrink-0"
+                style={{ color: "var(--m-primary)", border: "1px solid var(--m-border)" }}
+                title="Exit Wide View (Esc)"
+              >
+                <Minimize2 size={14} />
+                <span>Exit Wide</span>
+                <span className="hidden sm:inline-block text-[10px] opacity-60 font-mono ml-0.5">(Esc)</span>
+              </button>
+
+              {/* Mobile Close button */}
+              <button
+                type="button"
+                onClick={() => setIsChatMaximized(false)}
+                className="sm:hidden flex items-center justify-center size-8 rounded-xl border transition hover:opacity-80 shadow-xs shrink-0"
+                style={{
+                  color: "var(--m-text)",
+                  borderColor: "var(--m-border)",
+                  backgroundColor: "var(--m-surface-alt)",
+                }}
+                title="Close AI Tutor"
+                aria-label="Close AI Tutor"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+
+          {/* Main Body: Left Chat History Sidebar + Right Message Canvas */}
+          <div className="flex-1 flex overflow-hidden w-full relative">
+            {/* Mobile Off-canvas Backdrop Overlay */}
+            {wideSidebarOpen && (
+              <div
+                onClick={() => setWideSidebarOpen(false)}
+                className="fixed inset-0 z-30 bg-black/60 backdrop-blur-xs md:hidden animate-in fade-in duration-150"
+                aria-hidden="true"
+              />
+            )}
+
+            {/* Left Sidebar (Chats & Tasks History - Overlay drawer on mobile, side-by-side on desktop) */}
+            {wideSidebarOpen && (
+              <aside
+                className="fixed inset-y-0 left-0 z-40 w-[84%] max-w-[320px] md:relative md:inset-auto md:z-20 md:w-72 lg:w-80 shrink-0 border-r flex flex-col h-full shadow-2xl md:shadow-none animate-in slide-in-from-left duration-200"
+                style={{
+                  borderColor: "var(--m-border)",
+                  backgroundColor: "var(--m-surface-solid)",
+                }}
+              >
+                {/* Mobile Drawer Top Header */}
+                <div className="flex items-center justify-between p-3 border-b md:hidden" style={{ borderColor: "var(--m-border-light)" }}>
+                  <div className="flex items-center gap-2">
+                    <div className="size-6 rounded-lg grid place-items-center" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                      <Brain size={13} />
+                    </div>
+                    <span className="text-xs font-bold" style={{ color: "var(--m-text-heading)" }}>Chat History</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setWideSidebarOpen(false)}
+                    className="p-1.5 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition"
+                    style={{ color: "var(--m-text-sub)" }}
+                    aria-label="Close chat history drawer"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                {/* Top Action */}
+                <div className="p-3 border-b" style={{ borderColor: "var(--m-border-light)" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleNewChat();
+                      if (typeof window !== "undefined" && window.innerWidth < 768) {
+                        setWideSidebarOpen(false);
+                      }
+                    }}
+                    className="flex items-center justify-between w-full rounded-xl px-3.5 py-2.5 text-xs font-bold transition hover:scale-[1.01] shadow-xs active:scale-98"
+                    style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Plus size={15} />
+                      <span>New Chat</span>
+                    </span>
+                    <span className="hidden sm:inline-block text-[10px] opacity-75 font-mono px-1.5 py-0.5 rounded bg-black/20">Ctrl+N</span>
+                  </button>
+                </div>
+
+                {/* Chat Sessions List — Grouped chronologically like ChatGPT & Claude */}
+                <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-3">
+                  {groupedChatSessions.length === 0 ? (
+                    <div className="p-6 text-center text-xs opacity-60">
+                      <MessageSquare size={24} className="mx-auto mb-2 opacity-40" />
+                      <p className="font-semibold">No saved chats yet</p>
+                      <p className="text-[11px] mt-1 opacity-75">Send a message to automatically record your conversations.</p>
+                    </div>
+                  ) : (
+                    groupedChatSessions.map((group) => (
+                      <div key={group.section} className="space-y-0.5">
+                        <div
+                          className="px-3 pt-2 pb-1 text-[11px] font-semibold tracking-wider opacity-60 uppercase font-mono"
+                          style={{ color: "var(--m-text-sub)" }}
+                        >
+                          {group.section}
+                        </div>
+                        {group.items.map((session) => {
+                          const isActive = session.id === activeChatSessionId;
+                          const isRenaming = renamingSessionId === session.id;
+                          const isMenuOpen = openMenuSessionId === session.id;
+                          return (
+                            <div
+                              key={session.id}
+                              onClick={() => {
+                                if (!isRenaming) {
+                                  handleSelectSession(session.id);
+                                  if (typeof window !== "undefined" && window.innerWidth < 768) {
+                                    setWideSidebarOpen(false);
+                                  }
+                                }
+                              }}
+                              className={`group relative flex items-center justify-between w-full px-3 py-2 rounded-xl text-xs transition cursor-pointer text-left ${
+                                isMenuOpen ? "z-30" : "z-0"
+                              } ${
+                                isActive
+                                  ? "font-semibold shadow-xs"
+                                  : "opacity-80 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5"
+                              }`}
+                              style={{
+                                backgroundColor: isActive ? "var(--m-surface-alt, rgba(255,255,255,0.08))" : "transparent",
+                                color: isActive ? "var(--m-text-heading, #ffffff)" : "var(--m-text, #e2e8f0)",
+                                border: isActive ? "1px solid var(--m-border, rgba(255,255,255,0.12))" : "1px solid transparent",
+                              }}
+                              title={session.title}
+                            >
+                              {isRenaming ? (
+                                <div className="flex items-center gap-1.5 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+                                  <input
+                                    type="text"
+                                    value={renamingTitleDraft}
+                                    onChange={(e) => setRenamingTitleDraft(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") handleSaveRenameSession(session.id, e);
+                                      if (e.key === "Escape") handleCancelRenameSession(e);
+                                    }}
+                                    autoFocus
+                                    className="flex-1 bg-black/20 dark:bg-white/10 rounded-lg px-2 py-1 text-xs outline-none border border-[var(--m-primary)] text-[var(--m-text-heading)]"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleSaveRenameSession(session.id, e)}
+                                    className="p-1.5 rounded-lg hover:bg-emerald-500/20 text-emerald-400 transition"
+                                    title="Save name"
+                                  >
+                                    <Check size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={handleCancelRenameSession}
+                                    className="p-1.5 rounded-lg hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 transition"
+                                    title="Cancel"
+                                  >
+                                    <X size={13} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-1">
+                                    <span
+                                      className={`size-1.5 rounded-full shrink-0 transition ${
+                                        isActive
+                                          ? "bg-[var(--m-primary)] ring-4 ring-[var(--m-primary)]/20"
+                                          : "bg-transparent group-hover:bg-zinc-400/40"
+                                      }`}
+                                    />
+                                    <div className="truncate flex-1">
+                                      <p className="truncate text-xs leading-snug">{session.title || "New Chat"}</p>
+                                    </div>
+                                  </div>
+
+                                  {/* Right Action Icons: Pin Indicator + 3 Horizontal Dots */}
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {/* Pinned Indicator (visible when pinned) */}
+                                    {session.isPinned && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleTogglePinSession(session.id, e)}
+                                        className="p-1 rounded-md text-[var(--m-primary)] hover:opacity-80 transition"
+                                        title="Pinned chat (click to unpin)"
+                                        aria-label="Pinned"
+                                      >
+                                        <Pin size={13} className="-rotate-45" />
+                                      </button>
+                                    )}
+
+                                    {/* 3 Horizontal Dots Button */}
+                                    <button
+                                      data-chat-menu-trigger
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        setOpenMenuSessionId(isMenuOpen ? null : session.id);
+                                      }}
+                                      className={`p-1 rounded-md transition ${
+                                        isMenuOpen
+                                          ? "opacity-100 bg-black/15 dark:bg-white/15 text-[var(--m-text-heading)]"
+                                          : "opacity-0 group-hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-zinc-200"
+                                      }`}
+                                      title="Chat options"
+                                      aria-label="Chat options"
+                                    >
+                                      <MoreHorizontal size={14} />
+                                    </button>
+                                  </div>
+
+                                  {/* 3 Horizontal Dots Dropdown Menu */}
+                                  {isMenuOpen && (
+                                    <div
+                                      data-chat-menu-dropdown
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="absolute right-2 top-full mt-1 z-50 min-w-[145px] rounded-xl shadow-2xl border py-1.5 animate-in fade-in zoom-in-95 duration-100 backdrop-blur-md"
+                                      style={{
+                                        backgroundColor: "var(--m-surface-solid, #18181b)",
+                                        borderColor: "var(--m-border, rgba(255,255,255,0.14))",
+                                        boxShadow: "0 12px 30px -4px rgba(0, 0, 0, 0.6), 0 4px 12px -2px rgba(0, 0, 0, 0.4)",
+                                      }}
+                                    >
+                                      {/* Pin / Unpin option */}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleTogglePinSession(session.id, e)}
+                                        className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition text-left hover:bg-black/5 dark:hover:bg-white/10"
+                                        style={{ color: "var(--m-text, #e2e8f0)" }}
+                                      >
+                                        {session.isPinned ? (
+                                          <>
+                                            <PinOff size={13} className="opacity-70" />
+                                            <span>Unpin chat</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Pin size={13} className="opacity-70 -rotate-45" />
+                                            <span>Pin chat</span>
+                                          </>
+                                        )}
+                                      </button>
+
+                                      {/* Rename option */}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          setOpenMenuSessionId(null);
+                                          handleStartRenameSession(session.id, session.title || "New Chat", e);
+                                        }}
+                                        className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition text-left hover:bg-black/5 dark:hover:bg-white/10"
+                                        style={{ color: "var(--m-text, #e2e8f0)" }}
+                                      >
+                                        <Pencil size={13} className="opacity-70" />
+                                        <span>Rename</span>
+                                      </button>
+
+                                      <div className="my-1 border-t" style={{ borderColor: "var(--m-border-light, rgba(255,255,255,0.08))" }} />
+
+                                      {/* Delete option */}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          setOpenMenuSessionId(null);
+                                          handleDeleteSession(session.id, e);
+                                        }}
+                                        className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition text-left text-rose-400 hover:bg-rose-500/10"
+                                      >
+                                        <Trash2 size={13} />
+                                        <span>Delete</span>
+                                      </button>
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Bottom User Profile Card */}
+                <div className="p-3 border-t flex items-center justify-between" style={{ borderColor: "var(--m-border-light)" }}>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {userImageUrl ? (
+                      <img src={userImageUrl} alt={userNameDisplay} className="size-8 rounded-full object-cover shrink-0" />
+                    ) : (
+                      <div className="grid size-8 place-items-center rounded-full text-xs font-bold shrink-0" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                        {userNameDisplay.charAt(0)}
+                      </div>
+                    )}
+                    <div className="truncate">
+                      <p className="text-xs font-bold truncate leading-tight" style={{ color: "var(--m-text-heading)" }}>{userNameDisplay}</p>
+                      <p className="text-[10px] opacity-60 font-mono">Dream It AI Tutor</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleNewChat();
+                      if (typeof window !== "undefined" && window.innerWidth < 768) {
+                        setWideSidebarOpen(false);
+                      }
+                    }}
+                    className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition opacity-75 hover:opacity-100"
+                    title="New Chat"
+                  >
+                    <Plus size={15} />
+                  </button>
+                </div>
+              </aside>
+            )}
+
+            {/* Right Side: Conversation Area & Input */}
+            <div
+              className="flex-1 flex flex-col h-full min-w-0 overflow-hidden relative"
+              onWheel={(e) => {
+                // If scrolling occurred on blank space outside the message scroll container (e.g., around bottom form),
+                // forward the wheel delta to the messages container
+                if (chatMaxContainerRef.current) {
+                  const target = e.target as HTMLElement | null;
+                  const isInput = target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT");
+                  if (!isInput && !chatMaxContainerRef.current.contains(target)) {
+                    chatMaxContainerRef.current.scrollTop += e.deltaY;
+                  }
+                }
+              }}
+            >
+              {/* Fullscreen Messages Area - Full width scroll container so scrolling anywhere on the blank space scrolls the chat */}
+              <div
+                ref={chatMaxContainerRef}
+                className="flex-1 overflow-y-auto custom-scrollbar w-full overscroll-contain"
+                style={{ scrollBehavior: "smooth" }}
+              >
+                <div className="w-full max-w-4xl mx-auto px-3 sm:px-6 md:px-8 py-4 sm:py-8 space-y-4 sm:space-y-7">
+                {messages.map((m, idx) => (
+                  <div
+                    key={idx}
+                    className={`group flex flex-col ${
+                      m.role === "user" ? "items-end ml-auto max-w-[90%] sm:max-w-[75%]" : "items-start w-full max-w-full"
+                    }`}
+                  >
+                    <div
+                      className={`contain-chat transition ${
+                        m.role === "user"
+                          ? `user-chat-bubble ${editingMessageIdx === idx ? "w-full min-w-[260px] sm:min-w-[420px] rounded-2xl p-3 sm:p-4" : "w-fit rounded-2xl sm:rounded-[22px] px-3.5 py-2 sm:px-5 sm:py-3"} shadow-xs text-xs sm:text-[15px] leading-relaxed break-words`
+                          : "w-full py-1 sm:py-2 px-0.5 sm:px-1 text-xs sm:text-[15px] leading-relaxed"
+                      }`}
+                      style={
+                        m.role === "user"
+                          ? {
+                              backgroundColor: "var(--m-chat-user-bg)",
+                              color: "var(--m-chat-user-text)",
+                              border: "1px solid var(--m-chat-user-border, transparent)",
+                              borderRadius: editingMessageIdx === idx ? "16px" : "22px",
+                            }
+                          : {
+                              backgroundColor: "transparent",
+                              color: "var(--m-text)",
+                              border: "none",
+                              boxShadow: "none",
+                            }
+                      }
+                    >
+                      {editingMessageIdx === idx ? (
+                        <div className="space-y-3 py-1">
+                          <textarea
+                            value={editingMessageDraft}
+                            onChange={(e) => setEditingMessageDraft(e.target.value)}
+                            rows={Math.max(2, Math.min(8, editingMessageDraft.split("\n").length))}
+                            className="w-full resize-none rounded-xl p-3 text-xs sm:text-sm leading-relaxed outline-none border transition focus:ring-2 focus:ring-white/30"
+                            style={{
+                              backgroundColor: "rgba(0, 0, 0, 0.25)",
+                              color: "inherit",
+                              borderColor: "rgba(255, 255, 255, 0.2)",
+                            }}
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSaveAndSubmitEdit(idx);
+                              } else if (e.key === "Escape") {
+                                handleCancelEditMessage();
+                              }
+                            }}
+                          />
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={handleCancelEditMessage}
+                              className="rounded-lg px-3 py-1.5 text-xs font-medium transition hover:bg-white/10"
+                              style={{ border: "1px solid rgba(255,255,255,0.2)", color: "inherit" }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!editingMessageDraft.trim() || isAsking}
+                              onClick={() => handleSaveAndSubmitEdit(idx)}
+                              className="flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-xs font-bold transition hover:scale-102 disabled:opacity-40 shadow-xs"
+                              style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text, #ffffff)" }}
+                            >
+                              <span>Send</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : m.content ? (
+                        renderSimpleMarkdown(m.content, m.role === "user")
+                      ) : (
+                        <AIThinkingStatus size="lg" />
+                      )}
+                    </div>
+
+                    {/* ChatGPT-style Action Row (Copy, Share, Edit / Regenerate) */}
+                    {m.content && editingMessageIdx !== idx && (
+                      <div
+                        className={`flex items-center gap-1 sm:gap-1.5 mt-1 sm:mt-1.5 text-xs opacity-75 sm:opacity-70 group-hover:opacity-100 transition-opacity ${
+                          m.role === "user" ? "justify-end pr-1 sm:pr-2" : "justify-start pl-0.5 sm:pl-1"
+                        }`}
+                        style={{ color: "var(--m-text-sub)" }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleCopyMessage(m.content, idx)}
+                          className="p-1.5 rounded-lg transition hover:bg-black/10 dark:hover:bg-white/10 hover:text-white"
+                          title="Copy message"
+                          aria-label="Copy message"
+                        >
+                          {copiedMessageIdx === idx ? (
+                            <Check size={14} className="text-emerald-400" />
+                          ) : (
+                            <Copy size={14} />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleShareMessage(m.content)}
+                          className="p-1.5 rounded-lg transition hover:bg-black/10 dark:hover:bg-white/10 hover:text-white"
+                          title="Share"
+                          aria-label="Share message"
+                        >
+                          <Share size={14} />
+                        </button>
+                        {m.role === "user" ? (
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditMessage(idx, m.content)}
+                            className="p-1.5 rounded-lg transition hover:bg-black/10 dark:hover:bg-white/10 hover:text-white"
+                            title="Edit message"
+                            aria-label="Edit message"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleRegenerateResponse(idx)}
+                            className="p-1.5 rounded-lg transition hover:bg-black/10 dark:hover:bg-white/10 hover:text-white"
+                            title="Regenerate response"
+                            aria-label="Regenerate response"
+                          >
+                            <RotateCcw size={14} />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {isAsking && messages[messages.length - 1]?.role !== "assistant" && (
+                  <div className="flex w-fit items-center gap-3 py-2 pl-1">
+                    <AIThinkingStatus size="lg" />
+                  </div>
+                )}
+
+                {/* Quick Prompts when starting a chat */}
+                {messages.length <= 1 && (
+                  <div className="pt-2 sm:pt-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider mb-2 opacity-60 font-mono" style={{ color: "var(--m-text-sub)" }}>
+                      Suggested Prompts
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {[
+                        { title: "Explain a concept simply", desc: "Break down complex topics into clear steps", icon: Sparkles },
+                        { title: "Create practice quiz", desc: "Test my knowledge with active recall questions", icon: BookOpen },
+                        { title: "Debug & explain code", desc: "Find bugs and optimize algorithms", icon: Code },
+                        { title: "Create study schedule", desc: "Organize my exam prep and revision", icon: CalendarDays },
+                      ].map((starter, sIdx) => {
+                        const Icon = starter.icon;
+                        return (
+                          <button
+                            key={sIdx}
+                            type="button"
+                            onClick={() => {
+                              setChatDraft(starter.title);
+                            }}
+                            className="flex items-start gap-2.5 p-2.5 sm:p-3 rounded-2xl border text-left transition hover:scale-[1.01] active:scale-98 shadow-xs group"
+                            style={{
+                              borderColor: "var(--m-border)",
+                              backgroundColor: "var(--m-surface-alt)",
+                            }}
+                          >
+                            <div className="size-7 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-105 transition" style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}>
+                              <Icon size={14} />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold leading-snug" style={{ color: "var(--m-text-heading)" }}>{starter.title}</p>
+                              <p className="text-[10.5px] opacity-70 leading-tight mt-0.5" style={{ color: "var(--m-text-sub)" }}>{starter.desc}</p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+              {/* Fullscreen Input Bar (Responsive: safe-area padding and mobile-optimized buttons) */}
+              <form onSubmit={askCoach} onPaste={handleChatPaste} className="w-full max-w-5xl mx-auto px-2.5 sm:px-6 pb-[max(0.6rem,env(safe-area-inset-bottom))] sm:pb-6 pt-1.5 sm:pt-2 shrink-0">
+                {isExtractingChatFile && (
+                  <div className="flex items-center gap-2 rounded-xl px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-medium mb-1.5 sm:mb-2 minimal-inset animate-pulse" style={{ color: "var(--m-primary)", border: "1px solid var(--m-border)" }}>
+                    <Loader2 size={14} className="animate-spin text-indigo-400 shrink-0" />
+                    <span>Reading &amp; extracting text from document...</span>
+                  </div>
+                )}
+                {chatFile && !isExtractingChatFile && (
+                  <div className="flex items-center justify-between rounded-xl px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-medium mb-1.5 sm:mb-2 minimal-inset" style={{ color: "var(--m-primary)", border: "1px solid var(--m-border)" }}>
+                    <span className="flex items-center gap-2 truncate">
+                      {chatFile.isImage && chatFile.dataUrl ? (
+                        <img src={chatFile.dataUrl} alt={chatFile.name} className="size-6 object-cover rounded-md border border-black/10 shrink-0" />
+                      ) : chatFile.isPdf ? (
+                        <span className="flex items-center gap-1.5 shrink-0 text-rose-400">
+                          <FileText size={15} />
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-rose-500/15 font-bold uppercase tracking-wider">PDF</span>
+                        </span>
+                      ) : (
+                        <Paperclip size={14} />
+                      )}
+                      <span className="truncate">{chatFile.name}</span>
+                      <span className="text-[10px] opacity-75 font-mono">
+                        ({chatFile.pageCount ? `${chatFile.pageCount} pgs • ` : ""}{formatFileSize(chatFile.size)})
+                      </span>
+                    </span>
+                    <button type="button" onClick={() => setChatFile(null)} className="p-1 rounded-md transition hover:opacity-75" title="Remove attachment"><X size={14} /></button>
+                  </div>
+                )}
+                <div className="flex items-center gap-1.5 sm:gap-3 rounded-2xl p-1.5 pl-2 sm:p-2.5 sm:pl-4 minimal-inset shadow-xs" style={{ border: "1px solid var(--m-border)", backgroundColor: "var(--m-input-bg)" }}>
+                  <button type="button" onClick={() => chatFileInputRef.current?.click()} className="flex items-center justify-center size-8 sm:size-10 rounded-xl transition shrink-0 hover:opacity-75" style={{ color: "var(--m-text-sub)" }} title="Attach file (PDF / image)">
+                    <Paperclip size={16} className="sm:hidden" />
+                    <Paperclip size={18} className="hidden sm:block" />
+                  </button>
+                  <button type="button" onClick={() => setSnapModalOpen(true)} className="flex items-center justify-center size-8 sm:size-10 rounded-xl transition shrink-0 hover:opacity-75" style={{ color: "var(--m-primary)" }} title="Snap & Solve with Camera">
+                    <Camera size={16} className="sm:hidden" />
+                    <Camera size={18} className="hidden sm:block" />
+                  </button>
+
+                  <input
+                    value={chatDraft}
+                    onChange={(e) => setChatDraft(e.target.value)}
+                    onPaste={handleChatPaste}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        askCoach();
+                      }
+                    }}
+                    className="flex-1 bg-transparent py-1.5 sm:py-2 text-xs sm:text-sm outline-none min-w-0"
+                    style={{ color: "var(--m-text)" }}
+                    placeholder="Ask Dream It AI anything..."
+                  />
+                  <VoiceInputButton
+                    value={chatDraft}
+                    onChange={setChatDraft}
+                    disabled={isAsking}
+                    size={15}
+                  />
+                  <button
+                    type="submit"
+                    disabled={(!chatDraft.trim() && !chatFile) || isAsking}
+                    className="flex items-center justify-center size-8 sm:size-auto sm:gap-2 rounded-xl sm:px-5 sm:py-2.5 text-xs font-bold transition hover:scale-105 active:scale-95 disabled:opacity-40 shrink-0 shadow-xs"
+                    style={{ backgroundColor: "var(--m-primary)", color: "var(--m-primary-text)" }}
+                    aria-label="Send message"
+                  >
+                    <Send size={14} className="sm:hidden" />
+                    <Send size={15} className="hidden sm:inline-block" />
+                    <span className="hidden sm:inline">Send</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+    </main>
+  );
+}

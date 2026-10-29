@@ -1,0 +1,1237 @@
+@custom-variant dark (&:is(.dark *));
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DREAM IT — Multi-Theme System
+   5 minimalist palettes, solid surfaces, smooth animations
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Theme 1: Ethereal Light ─────────────────────────────────────────────
+   Soft whites, muted grays, and a touch of icy blue.
+   A clean, airy, cloud-like aesthetic.
+   ──────────────────────────────────────────────────────────────────────── */
+.theme-ethereal-light {
+  --font-size: 16px;
+  --background: #f4f6f9;
+  --foreground: #1a1d23;
+  --card: #ffffff;
+  --card-foreground: #1a1d23;
+  --popover: #ffffff;
+  --popover-foreground: #1a1d23;
+  --primary: #3b6b8a;
+  --primary-foreground: #f8fafc;
+  --secondary: #e8edf2;
+  --secondary-foreground: #3b6b8a;
+  --muted: #ebeef3;
+  --muted-foreground: #6b7280;
+  --accent: #a8c8e0;
+  --accent-foreground: #1a2a3a;
+  --destructive: #c44b4b;
+  --destructive-foreground: #ffffff;
+  --border: rgba(59, 107, 138, 0.12);
+  --input: transparent;
+  --input-background: #f8fafc;
+  --switch-background: #b8c5d0;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #7ba3be;
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 1rem;
+  --sidebar: #eaeff4;
+  --sidebar-foreground: #1a1d23;
+  --sidebar-primary: #3b6b8a;
+  --sidebar-primary-foreground: #f8fafc;
+  --sidebar-accent: #dae4ed;
+  --sidebar-accent-foreground: #3b6b8a;
+  --sidebar-border: #cdd6e0;
+  --sidebar-ring: #7ba3be;
+
+  /* Dream It Dashboard theme tokens */
+  --m-bg: #f4f6f9;
+  --m-surface: #ffffff;
+  --m-surface-solid: #ffffff;
+  --m-surface-hover: #f1f5f9;
+  --m-surface-alt: #f1f5f9;
+  --m-border: rgba(148, 163, 184, 0.4);
+  --m-border-light: rgba(148, 163, 184, 0.25);
+  --m-text: #1a1d23;
+  --m-text-heading: #111827;
+  --m-text-sub: #4b5563;
+  --m-text-muted: #6b7280;
+  --m-text-faint: #9ca3af;
+  --m-primary: #3b6b8a;
+  --m-primary-hover: #2d5570;
+  --m-primary-text: #ffffff;
+  --m-accent: #a8c8e0;
+  --m-accent-text: #1a2a3a;
+  --m-success: #22c55e;
+  --m-danger: #c44b4b;
+  --m-danger-bg: #fef2f2;
+  --m-danger-border: #fecaca;
+  --m-danger-text: #991b1b;
+  --m-warning: #d97706;
+  --m-input-bg: #ffffff;
+  --m-chat-bot-bg: #edf2f7;
+  --m-chat-bot-text: #2d5570;
+  --m-chat-user-bg: #3b6b8a;
+  --m-chat-user-text: #ffffff;
+  --m-chat-user-border: rgba(59, 107, 138, 0.3);
+  --m-sidebar-bg: #eaeff4;
+  --m-sidebar-pill-bg: #dce5ee;
+  --m-sidebar-card-bg: #dce5ee;
+  --m-sidebar-card-border: rgba(190, 205, 220, 0.5);
+  --m-selection: rgba(59, 130, 246, 0.25);
+  --m-selection-text: #0f172a;
+  --m-modal-overlay: rgba(20, 30, 45, 0.45);
+  --m-modal-surface: #ffffff;
+  --m-is-dark: 0;
+
+
+
+  /* Anti-Gravity tokens */
+  --ag-bob-distance: 6px;
+  --ag-hover-lift: -8px;
+  --ag-hover-shadow: rgba(59, 107, 138, 0.15);
+}
+
+/* ─── Theme 2: Midnight Void ──────────────────────────────────────────────
+   Deep charcoal, soft blacks, and muted silver.
+   A sophisticated, immersive dark experience.
+   ──────────────────────────────────────────────────────────────────────── */
+.theme-midnight-void {
+  --background: #0a0c10;
+  --foreground: #e4e7ec;
+  --card: #12141a;
+  --card-foreground: #e4e7ec;
+  --popover: #12141a;
+  --popover-foreground: #e4e7ec;
+  --primary: #a78bfa;
+  --primary-foreground: #0a0c10;
+  --secondary: #1e2028;
+  --secondary-foreground: #e4e7ec;
+  --muted: #1e2028;
+  --muted-foreground: #9ca3af;
+  --accent: #a78bfa;
+  --accent-foreground: #0a0c10;
+  --destructive: #f87171;
+  --destructive-foreground: #0a0c10;
+  --border: rgba(148, 163, 184, 0.12);
+  --input: rgba(148, 163, 184, 0.08);
+  --ring: #7c5cc5;
+  --sidebar: #0e1015;
+  --sidebar-foreground: #e4e7ec;
+  --sidebar-primary: #a78bfa;
+  --sidebar-primary-foreground: #0a0c10;
+  --sidebar-accent: #1e2028;
+  --sidebar-accent-foreground: #e4e7ec;
+  --sidebar-border: rgba(148, 163, 184, 0.1);
+  --sidebar-ring: #7c5cc5;
+
+  --m-bg: #030712;
+  --m-surface: #111827;
+  --m-surface-solid: #111827;
+  --m-surface-hover: #1f2937;
+  --m-surface-alt: #1f2937;
+  --m-border: rgba(75, 85, 99, 0.6);
+  --m-border-light: rgba(75, 85, 99, 0.4);
+  --m-text: #f3f4f6;
+  --m-text-heading: #ffffff;
+  --m-text-sub: #9ca3af;
+  --m-text-muted: #6b7280;
+  --m-text-faint: #4b5563;
+  --m-primary: #a78bfa;
+  --m-primary-hover: #8b5cf6;
+  --m-primary-text: #0a0c10;
+  --m-accent: #c4b5fd;
+  --m-accent-text: #1e1033;
+  --m-success: #34d399;
+  --m-danger: #f87171;
+  --m-danger-bg: #291010;
+  --m-danger-border: #5c1f1f;
+  --m-danger-text: #fca5a5;
+  --m-warning: #fbbf24;
+  --m-input-bg: #14161f;
+  --m-chat-bot-bg: #1a1d26;
+  --m-chat-bot-text: #d4d9e2;
+  --m-chat-user-bg: #2d2448;
+  --m-chat-user-text: #f3e8ff;
+  --m-chat-user-border: rgba(167, 139, 250, 0.25);
+  --m-sidebar-bg: #0e1015;
+  --m-sidebar-pill-bg: #1e212b;
+  --m-sidebar-card-bg: #181b24;
+  --m-sidebar-card-border: rgba(55, 60, 75, 0.5);
+  --m-selection: rgba(167, 139, 250, 0.3);
+  --m-selection-text: #ffffff;
+  --m-modal-overlay: rgba(0, 0, 0, 0.7);
+  --m-modal-surface: #12141a;
+  --m-is-dark: 1;
+
+
+
+  --ag-bob-distance: 5px;
+  --ag-hover-lift: -10px;
+  --ag-hover-shadow: rgba(167, 139, 250, 0.2);
+}
+
+/* ─── Theme 3: Sage Harmony ───────────────────────────────────────────────
+   Minimalist soft greens and earthy off-whites.
+   The closest successor to the original Dream It look.
+   ──────────────────────────────────────────────────────────────────────── */
+.theme-sage-harmony {
+  --background: #f6f4ee;
+  --foreground: #17211d;
+  --card: #fffefb;
+  --card-foreground: #17211d;
+  --popover: #fffefb;
+  --popover-foreground: #17211d;
+  --primary: #264d3d;
+  --primary-foreground: #fffdf6;
+  --secondary: #e6ede4;
+  --secondary-foreground: #264d3d;
+  --muted: #eeebe3;
+  --muted-foreground: #6d746e;
+  --accent: #f2c77f;
+  --accent-foreground: #352812;
+  --destructive: #bd4b42;
+  --destructive-foreground: #ffffff;
+  --border: rgba(38, 77, 61, 0.14);
+  --input: transparent;
+  --input-background: #f9f7f1;
+  --switch-background: #b9c5b9;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #7da28a;
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 1rem;
+  --sidebar: #e7eee4;
+  --sidebar-foreground: #17211d;
+  --sidebar-primary: #264d3d;
+  --sidebar-primary-foreground: #fffdf6;
+  --sidebar-accent: #d6e5d4;
+  --sidebar-accent-foreground: #264d3d;
+  --sidebar-border: #cbd8ca;
+  --sidebar-ring: #7da28a;
+
+  --m-bg: #f6f4ee;
+  --m-surface: #fffefb;
+  --m-surface-solid: #fffefb;
+  --m-surface-hover: #f3f6f0;
+  --m-surface-alt: #edf3eb;
+  --m-border: rgba(203, 216, 202, 0.65);
+  --m-border-light: rgba(220, 229, 219, 0.55);
+  --m-text: #17211d;
+  --m-text-heading: #172b20;
+  --m-text-sub: #56725d;
+  --m-text-muted: #78887c;
+  --m-text-faint: #829087;
+  --m-primary: #244c3b;
+  --m-primary-hover: #1b3b2d;
+  --m-primary-text: #ffffff;
+  --m-accent: #f2cf91;
+  --m-accent-text: #3b2b12;
+  --m-success: #27ae60;
+  --m-danger: #8b3a30;
+  --m-danger-bg: #fff0e9;
+  --m-danger-border: #f5c6cb;
+  --m-danger-text: #9a463f;
+  --m-warning: #d97706;
+  --m-input-bg: #ffffff;
+  --m-chat-bot-bg: #edf4eb;
+  --m-chat-bot-text: #244c3b;
+  --m-chat-user-bg: #264336;
+  --m-chat-user-text: #ffffff;
+  --m-chat-user-border: rgba(242, 207, 145, 0.25);
+  --m-sidebar-bg: #e7eee4;
+  --m-sidebar-pill-bg: #d7e4d3;
+  --m-sidebar-card-bg: #dbe7d8;
+  --m-sidebar-card-border: rgba(191, 209, 192, 0.6);
+  --m-selection: rgba(242, 207, 145, 0.35);
+  --m-selection-text: #ffffff;
+  --m-modal-overlay: rgba(18, 38, 29, 0.45);
+  --m-modal-surface: #fffefb;
+  --m-is-dark: 0;
+
+
+
+  --ag-bob-distance: 6px;
+  --ag-hover-lift: -8px;
+  --ag-hover-shadow: rgba(36, 76, 59, 0.14);
+}
+
+/* ─── Theme 4: Rose Quartz ────────────────────────────────────────────────
+   Blush pinks, warm grays, dusty mauve.
+   Soft, warm, and refined.
+   ──────────────────────────────────────────────────────────────────────── */
+.theme-rose-quartz {
+  --background: #faf5f5;
+  --foreground: #2d1f2b;
+  --card: #fffbfb;
+  --card-foreground: #2d1f2b;
+  --popover: #fffbfb;
+  --popover-foreground: #2d1f2b;
+  --primary: #8b5a6b;
+  --primary-foreground: #fdf8f9;
+  --secondary: #f0e4e8;
+  --secondary-foreground: #8b5a6b;
+  --muted: #f0e8eb;
+  --muted-foreground: #7a6972;
+  --accent: #d4a0b0;
+  --accent-foreground: #3a1a28;
+  --destructive: #c44b4b;
+  --destructive-foreground: #ffffff;
+  --border: rgba(139, 90, 107, 0.14);
+  --input: transparent;
+  --input-background: #fdf8f9;
+  --switch-background: #d4b8c2;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #b88a9a;
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 1rem;
+  --sidebar: #f2e8ec;
+  --sidebar-foreground: #2d1f2b;
+  --sidebar-primary: #8b5a6b;
+  --sidebar-primary-foreground: #fdf8f9;
+  --sidebar-accent: #e8d4dc;
+  --sidebar-accent-foreground: #8b5a6b;
+  --sidebar-border: #dcc8d0;
+  --sidebar-ring: #b88a9a;
+
+  --m-bg: #faf5f5;
+  --m-surface: #fffbfb;
+  --m-surface-solid: #fffbfb;
+  --m-surface-hover: #f7eff2;
+  --m-surface-alt: #f4e9ed;
+  --m-border: rgba(212, 184, 194, 0.6);
+  --m-border-light: rgba(225, 205, 214, 0.5);
+  --m-text: #2d1f2b;
+  --m-text-heading: #1f1220;
+  --m-text-sub: #6b4d5a;
+  --m-text-muted: #7a6972;
+  --m-text-faint: #9a8990;
+  --m-primary: #8b5a6b;
+  --m-primary-hover: #724558;
+  --m-primary-text: #ffffff;
+  --m-accent: #d4a0b0;
+  --m-accent-text: #3a1a28;
+  --m-success: #22c55e;
+  --m-danger: #c44b4b;
+  --m-danger-bg: #fff0f0;
+  --m-danger-border: #f0c0c0;
+  --m-danger-text: #991b1b;
+  --m-warning: #d97706;
+  --m-input-bg: #ffffff;
+  --m-chat-bot-bg: #f5eaef;
+  --m-chat-bot-text: #6b4d5a;
+  --m-chat-user-bg: #422d3b;
+  --m-chat-user-text: #ffffff;
+  --m-chat-user-border: rgba(212, 160, 176, 0.25);
+  --m-sidebar-bg: #f2e8ec;
+  --m-sidebar-pill-bg: #e5d4dc;
+  --m-sidebar-card-bg: #ebdce3;
+  --m-sidebar-card-border: rgba(212, 184, 194, 0.5);
+  --m-selection: rgba(212, 160, 176, 0.35);
+  --m-selection-text: #ffffff;
+  --m-modal-overlay: rgba(45, 31, 43, 0.45);
+  --m-modal-surface: #fffbfb;
+  --m-is-dark: 0;
+
+
+
+  --ag-bob-distance: 6px;
+  --ag-hover-lift: -8px;
+  --ag-hover-shadow: rgba(139, 90, 107, 0.15);
+}
+
+/* ─── Theme 5: Arctic Dusk ────────────────────────────────────────────────
+   Deep navy, frost blue, pale lavender.
+   Cool, calming, twilight-inspired dark theme.
+   ──────────────────────────────────────────────────────────────────────── */
+.theme-arctic-dusk {
+  --background: #0c1020;
+  --foreground: #dde3f0;
+  --card: #141830;
+  --card-foreground: #dde3f0;
+  --popover: #141830;
+  --popover-foreground: #dde3f0;
+  --primary: #60a5fa;
+  --primary-foreground: #0c1020;
+  --secondary: #1c2240;
+  --secondary-foreground: #dde3f0;
+  --muted: #1c2240;
+  --muted-foreground: #8896b5;
+  --accent: #93c5fd;
+  --accent-foreground: #0c1020;
+  --destructive: #fb7185;
+  --destructive-foreground: #0c1020;
+  --border: rgba(96, 165, 250, 0.1);
+  --input: rgba(96, 165, 250, 0.06);
+  --ring: #3b82f6;
+  --sidebar: #101428;
+  --sidebar-foreground: #dde3f0;
+  --sidebar-primary: #60a5fa;
+  --sidebar-primary-foreground: #0c1020;
+  --sidebar-accent: #1c2240;
+  --sidebar-accent-foreground: #dde3f0;
+  --sidebar-border: rgba(96, 165, 250, 0.08);
+  --sidebar-ring: #3b82f6;
+
+  --m-bg: #020617;
+  --m-surface: #0f172a;
+  --m-surface-solid: #0f172a;
+  --m-surface-hover: #1e293b;
+  --m-surface-alt: #1e293b;
+  --m-border: rgba(51, 65, 85, 0.8);
+  --m-border-light: rgba(51, 65, 85, 0.5);
+  --m-text: #f1f5f9;
+  --m-text-heading: #ffffff;
+  --m-text-sub: #94a3b8;
+  --m-text-muted: #6674a0;
+  --m-text-faint: #4a5580;
+  --m-primary: #60a5fa;
+  --m-primary-hover: #3b82f6;
+  --m-primary-text: #0c1020;
+  --m-accent: #93c5fd;
+  --m-accent-text: #0a1530;
+  --m-success: #34d399;
+  --m-danger: #fb7185;
+  --m-danger-bg: #320f19;
+  --m-danger-border: #5c1a2a;
+  --m-danger-text: #fda4af;
+  --m-warning: #fbbf24;
+  --m-input-bg: #161a34;
+  --m-chat-bot-bg: #1a203e;
+  --m-chat-bot-text: #b8c5e0;
+  --m-chat-user-bg: #1c3358;
+  --m-chat-user-text: #ffffff;
+  --m-chat-user-border: rgba(96, 165, 250, 0.25);
+  --m-sidebar-bg: #101428;
+  --m-sidebar-pill-bg: #20264c;
+  --m-sidebar-card-bg: #1c2244;
+  --m-sidebar-card-border: rgba(50, 65, 105, 0.45);
+  --m-selection: rgba(96, 165, 250, 0.35);
+  --m-selection-text: #ffffff;
+  --m-modal-overlay: rgba(0, 0, 10, 0.72);
+  --m-modal-surface: #141830;
+  --m-is-dark: 1;
+  --ag-bob-distance: 5px;
+  --ag-hover-lift: -10px;
+  --ag-hover-shadow: rgba(96, 165, 250, 0.2);
+}
+
+/* ─── Theme: Standard Light (Everyday White & Mist) ──────────────────────
+   Standard pure white surfaces (#ffffff) with soft mist canvas (#fafafa)
+   and balanced charcoal (#27272a). Softened contrast for comfortable daily use.
+   ──────────────────────────────────────────────────────────────────────── */
+:root,
+.theme-mono-light {
+  --font-size: 16px;
+  --background: #fafafa;
+  --foreground: #27272a;
+  --card: #ffffff;
+  --card-foreground: #27272a;
+  --popover: #ffffff;
+  --popover-foreground: #27272a;
+  --primary: #27272a;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #27272a;
+  --muted: #f4f4f5;
+  --muted-foreground: #64748b;
+  --accent: #f1f5f9;
+  --accent-foreground: #0f172a;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #e2e8f0;
+  --input: transparent;
+  --input-background: #ffffff;
+  --switch-background: #e2e8f0;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #27272a;
+  --chart-1: #27272a;
+  --chart-2: #475569;
+  --chart-3: #64748b;
+  --chart-4: #94a3b8;
+  --chart-5: #cbd5e1;
+  --radius: 1rem;
+  --sidebar: #f8fafc;
+  --sidebar-foreground: #27272a;
+  --sidebar-primary: #27272a;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f1f5f9;
+  --sidebar-accent-foreground: #27272a;
+  --sidebar-border: #e2e8f0;
+  --sidebar-ring: #27272a;
+
+  /* Dream It Dashboard theme tokens */
+  --m-bg: #fafafa;
+  --m-surface: #ffffff;
+  --m-surface-solid: #ffffff;
+  --m-surface-hover: #f4f4f5;
+  --m-surface-alt: #f4f4f5;
+  --m-border: #e2e8f0;
+  --m-border-light: #f1f5f9;
+  --m-text: #27272a;
+  --m-text-heading: #1e293b;
+  --m-text-sub: #475569;
+  --m-text-muted: #64748b;
+  --m-text-faint: #94a3b8;
+  --m-primary: #27272a;
+  --m-primary-hover: #3f3f46;
+  --m-primary-text: #ffffff;
+  --m-accent: #f1f5f9;
+  --m-accent-text: #0f172a;
+  --m-success: #16a34a;
+  --m-danger: #dc2626;
+  --m-danger-bg: #fef2f2;
+  --m-danger-border: #fecaca;
+  --m-danger-text: #991b1b;
+  --m-warning: #d97706;
+  --m-input-bg: #ffffff;
+  --m-chat-bot-bg: #f4f4f5;
+  --m-chat-bot-text: #27272a;
+  --m-chat-user-bg: #f4f4f5;
+  --m-chat-user-text: #27272a;
+  --m-chat-user-border: #e4e4e7;
+  --m-sidebar-bg: #f8fafc;
+  --m-sidebar-pill-bg: #f1f5f9;
+  --m-sidebar-card-bg: #ffffff;
+  --m-sidebar-card-border: #e2e8f0;
+  --m-selection: rgba(39, 39, 42, 0.12);
+  --m-selection-text: #27272a;
+  --m-modal-overlay: rgba(15, 23, 42, 0.45);
+  --m-modal-surface: #ffffff;
+  --m-is-dark: 0;
+
+  /* Anti-Gravity tokens */
+  --ag-bob-distance: 0px;
+  --ag-hover-lift: -3px;
+  --ag-hover-shadow: rgba(0, 0, 0, 0.05);
+}
+
+/* ─── Theme: Standard Dark (Comfortable Neutral Night) ───────────────────
+   Deep neutral dark canvas (#171717) with soft cards (#212121)
+   and readable white text (#ececec). Zero glare for comfortable night use.
+   ──────────────────────────────────────────────────────────────────────── */
+.theme-mono-dark {
+  --background: #171717;
+  --foreground: #ececec;
+  --card: #212121;
+  --card-foreground: #ececec;
+  --popover: #212121;
+  --popover-foreground: #ececec;
+  --primary: #ffffff;
+  --primary-foreground: #171717;
+  --secondary: #2a2a2a;
+  --secondary-foreground: #ececec;
+  --muted: #2a2a2a;
+  --muted-foreground: #9ca3af;
+  --accent: #2e2e2e;
+  --accent-foreground: #ffffff;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.06);
+  --ring: #ffffff;
+  --chart-1: #ffffff;
+  --chart-2: #d4d4d8;
+  --chart-3: #a1a1aa;
+  --chart-4: #71717a;
+  --chart-5: #3f3f46;
+  --sidebar: #171717;
+  --sidebar-foreground: #ececec;
+  --sidebar-primary: #ffffff;
+  --sidebar-primary-foreground: #171717;
+  --sidebar-accent: #262626;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: #ffffff;
+
+  --m-bg: #171717;
+  --m-surface: #212121;
+  --m-surface-solid: #212121;
+  --m-surface-hover: #2a2a2a;
+  --m-surface-alt: #262626;
+  --m-border: rgba(255, 255, 255, 0.12);
+  --m-border-light: rgba(255, 255, 255, 0.07);
+  --m-text: #ececec;
+  --m-text-heading: #ffffff;
+  --m-text-sub: #9ca3af;
+  --m-text-muted: #71717a;
+  --m-text-faint: #52525b;
+  --m-primary: #ffffff;
+  --m-primary-hover: #e4e4e7;
+  --m-primary-text: #171717;
+  --m-accent: #2a2a2a;
+  --m-accent-text: #ffffff;
+  --m-success: #22c55e;
+  --m-danger: #ef4444;
+  --m-danger-bg: #2a1515;
+  --m-danger-border: #451a1a;
+  --m-danger-text: #fca5a5;
+  --m-warning: #f59e0b;
+  --m-input-bg: #1c1c1c;
+  --m-chat-bot-bg: #262626;
+  --m-chat-bot-text: #ececec;
+  --m-chat-user-bg: #2a2a2a;
+  --m-chat-user-text: #ececec;
+  --m-chat-user-border: rgba(255, 255, 255, 0.1);
+  --m-sidebar-bg: #171717;
+  --m-sidebar-pill-bg: #2a2a2a;
+  --m-sidebar-card-bg: #212121;
+  --m-sidebar-card-border: rgba(255, 255, 255, 0.08);
+  --m-selection: rgba(255, 255, 255, 0.22);
+  --m-selection-text: #ffffff;
+  --m-modal-overlay: rgba(0, 0, 0, 0.75);
+  --m-modal-surface: #212121;
+  --m-is-dark: 1;
+
+  --ag-bob-distance: 0px;
+  --ag-hover-lift: -3px;
+  --ag-hover-shadow: rgba(0, 0, 0, 0.2);
+}
+
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BASE STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+
+  html {
+    font-size: var(--font-size);
+  }
+
+  h1 {
+    font-size: var(--text-2xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h2 {
+    font-size: var(--text-xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h3 {
+    font-size: var(--text-lg);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h4 {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  label {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  button {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  input {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-normal);
+    line-height: 1.5;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DREAM IT DASHBOARD — Theme-Aware Overrides
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.dreamit-dash,
+.morrow-dash {
+  background-color: var(--m-bg);
+  color: var(--m-text);
+  transition: background-color 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+              color 0.4s ease;
+}
+
+::selection,
+::-moz-selection,
+*::selection,
+*::-moz-selection,
+.dreamit-dash *::selection,
+.morrow-dash *::selection {
+  background-color: var(--m-selection) !important;
+  color: var(--m-selection-text, inherit) !important;
+}
+
+/* User chat bubble styling guarantee */
+.user-chat-bubble,
+.user-chat-bubble * {
+  color: var(--m-chat-user-text) !important;
+}
+.user-chat-bubble code {
+  color: var(--m-chat-user-text) !important;
+  background-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SURFACES & CARDS — Flat, clean, solid design (no glass artifacts)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.minimal-surface {
+  background: var(--m-surface-solid);
+  border: 1px solid var(--m-border-light);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.minimal-inset {
+  background: var(--m-surface-alt);
+  border: 1px solid var(--m-border-light);
+}
+
+/* Legacy Panel Aliases — solid surfaces */
+.glass-panel,
+.glass-panel-solid,
+.liquid-glass,
+.liquid-glass-float,
+.liquid-glass-wide-modal {
+  background: var(--m-surface-solid);
+  border: 1px solid var(--m-border-light);
+  box-shadow: 0 4px 20px -4px rgba(0, 0, 0, 0.06);
+}
+
+.glass-input {
+  background: var(--m-input-bg);
+  border: 1px solid var(--m-border);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PREMIUM LIQUID GLASS (Business Class Aesthetics)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.liquid-glass-premium {
+  /* Using color-mix to create a highly translucent version of the surface color */
+  background: color-mix(in srgb, var(--m-surface-solid) 65%, transparent);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid color-mix(in srgb, var(--m-border-light) 60%, transparent);
+  box-shadow: 
+    0 4px 24px -4px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.dark .liquid-glass-premium,
+.theme-midnight-void .liquid-glass-premium,
+.theme-arctic-dusk .liquid-glass-premium {
+  background: color-mix(in srgb, var(--m-surface-solid) 40%, transparent);
+  box-shadow: 
+    0 8px 32px -4px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Ambient Background Orb Animations */
+@keyframes ambient-drift {
+  0% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30px, -50px) scale(1.1); }
+  66% { transform: translate(-20px, 20px) scale(0.9); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+
+.ambient-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  z-index: 0;
+  opacity: 0.5;
+  animation: ambient-drift 15s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Nav layers — sidebar & top bar */
+.glass-sidebar,
+.liquid-glass-nav {
+  background: var(--m-sidebar-bg);
+  border-right: 1px solid var(--m-border-light);
+  box-shadow: 2px 0 12px -4px rgba(0, 0, 0, 0.04);
+}
+
+.glass-header,
+.liquid-glass-header {
+  background: var(--m-surface-solid);
+  border-bottom: 1px solid var(--m-border-light);
+  box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.04);
+}
+
+.glass-card-hover:hover {
+  background: var(--m-surface-hover);
+  border-color: var(--m-border);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MAIN PAGE / DASHBOARD FEATURE HOVER ZOOM (Excluding Landing Page)
+   Features, widgets, project cards, and study tools slightly zoom on hover.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.dreamit-dash .feature-zoom,
+.dreamit-dash .feature-card,
+.dreamit-dash .feature-widget,
+.dreamit-dash .feature-chip {
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+.dreamit-dash .feature-zoom:hover,
+.dreamit-dash .feature-card:hover,
+.dreamit-dash .feature-widget:hover {
+  will-change: transform;
+  transform: scale(1.018) translateY(-2px);
+  box-shadow: 0 10px 26px -4px rgba(0, 0, 0, 0.08);
+  z-index: 2;
+}
+
+.dreamit-dash .feature-chip:hover {
+  will-change: transform;
+  transform: scale(1.035);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ANTI-GRAVITY EFFECT — Weightless Motion
+   Continuous idle bobbing + smooth hover float-up.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes anti-gravity-bob {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(calc(-1 * var(--ag-bob-distance)));
+  }
+}
+
+@keyframes anti-gravity-shimmer {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.anti-gravity {
+  animation: anti-gravity-bob 6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  transition: 
+    transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Stagger animations for multiple items so they don't bob in unison */
+.anti-gravity:nth-child(2) { animation-delay: -1.2s; }
+.anti-gravity:nth-child(3) { animation-delay: -2.4s; }
+.anti-gravity:nth-child(4) { animation-delay: -3.6s; }
+.anti-gravity:nth-child(5) { animation-delay: -4.8s; }
+
+.anti-gravity:hover {
+  animation-play-state: paused;
+  transform: translateY(var(--ag-hover-lift)) scale(1.02);
+  box-shadow: 
+    0 20px 50px -8px var(--ag-hover-shadow),
+    0 8px 24px -4px rgba(0, 0, 0, 0.08);
+}
+
+
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THEME TRANSITION — Smooth palette morphing
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.theme-transition,
+.theme-transition *,
+.theme-transition *::before,
+.theme-transition *::after {
+  transition: 
+    background-color 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SLEEK CUSTOM SCROLLBARS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--m-border);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--m-text-sub);
+}
+
+/* Firefox & Mobile touch scrolling optimization */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--m-border) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Hide scrollbars for swipeable chip bars & horizontal carousels on touch */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THEME-AWARE CLERK AUTH FORM STYLING (First Name, Last Name, Inputs & Labels)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.cl-card,
+.cl-rootBox {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Form labels (First name, Last name, Email address, Password, etc.) */
+.cl-formFieldLabel,
+.cl-headerTitle,
+.cl-formHeaderTitle,
+.cl-formHeaderSubtitle,
+.cl-identityPreviewText,
+.cl-formFieldRow label {
+  color: var(--m-text-heading) !important;
+  font-weight: 600 !important;
+}
+
+/* Input Fields (First name, Last name, Email, Password, OTP) */
+.cl-formFieldInput,
+.cl-otpCodeFieldInput {
+  background: var(--m-input-bg) !important;
+  color: var(--m-text) !important;
+  border: 1px solid var(--m-border) !important;
+  border-radius: 0.75rem !important;
+  transition: all 0.2s ease !important;
+}
+
+.cl-formFieldInput::placeholder {
+  color: var(--m-text-muted) !important;
+  opacity: 0.7 !important;
+}
+
+.cl-formFieldInput:focus,
+.cl-otpCodeFieldInput:focus {
+  border-color: var(--m-primary) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--m-primary) 22%, transparent) !important;
+  background: var(--m-surface-solid) !important;
+}
+
+/* Action Links & Password Toggle Buttons */
+.cl-formFieldAction,
+.cl-formResendCodeLink,
+.cl-footerActionLink {
+  color: var(--m-primary) !important;
+  font-weight: 600 !important;
+}
+
+.cl-formFieldAction:hover,
+.cl-formResendCodeLink:hover,
+.cl-footerActionLink:hover {
+  color: var(--m-primary-hover) !important;
+}
+
+/* Hints & Subtext */
+.cl-formFieldHintText,
+.cl-formHeaderSubtitle {
+  color: var(--m-text-muted) !important;
+}
+
+/* Primary Action Button */
+.cl-formButtonPrimary {
+  background-color: var(--m-primary) !important;
+  color: var(--m-primary-text) !important;
+  border-radius: 0.75rem !important;
+  font-weight: 700 !important;
+  box-shadow: 0 4px 15px color-mix(in srgb, var(--m-primary) 30%, transparent) !important;
+  transition: transform 0.2s ease, opacity 0.2s ease, background-color 0.2s ease !important;
+}
+
+.cl-formButtonPrimary:hover {
+  background-color: var(--m-primary-hover) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Social Buttons (Google OAuth) */
+.cl-social-btn {
+  background: var(--m-input-bg) !important;
+  border: 1px solid var(--m-border) !important;
+  color: var(--m-text-heading) !important;
+  transition: all 0.2s ease !important;
+}
+
+.cl-social-btn:hover {
+  background: var(--m-surface-alt) !important;
+  border-color: var(--m-primary) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Identity Preview Box */
+.cl-identityPreview {
+  background: var(--m-surface-alt) !important;
+  border: 1px solid var(--m-border-light) !important;
+  border-radius: 0.75rem !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THEME-AWARE CLERK OTP VERIFICATION CODE STYLING
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* OTP Code Field Container */
+.cl-otpCodeField,
+.cl-otpCodeFieldInputs {
+  gap: 0.5rem !important;
+  justify-content: center !important;
+  margin: 1rem 0 !important;
+}
+
+/* Individual OTP Digit Box */
+.cl-otpCodeFieldInput {
+  width: 2.75rem !important;
+  height: 3.25rem !important;
+  font-size: 1.25rem !important;
+  font-weight: 700 !important;
+  text-align: center !important;
+  background: var(--m-input-bg) !important;
+  color: var(--m-text-heading) !important;
+  border: 1.5px solid var(--m-border) !important;
+  border-radius: 0.75rem !important;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--m-primary) 6%, transparent) !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.cl-otpCodeFieldInput:focus,
+.cl-otpCodeFieldInput--focused,
+.cl-otpCodeFieldInput[data-status="focused"] {
+  border-color: var(--m-primary) !important;
+  background: var(--m-surface-solid) !important;
+  color: var(--m-primary) !important;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--m-primary) 22%, transparent) !important;
+  transform: translateY(-2px) scale(1.05) !important;
+}
+
+.cl-otpCodeFieldInput[data-status="filled"] {
+  border-color: var(--m-primary) !important;
+  background: color-mix(in srgb, var(--m-primary) 8%, var(--m-surface)) !important;
+}
+
+/* Identity Preview Box (e.g. "Verifying code sent to email@example.com") */
+.cl-identityPreviewText {
+  color: var(--m-text-heading) !important;
+  font-weight: 600 !important;
+}
+
+.cl-identityPreviewEditButton,
+.cl-identityPreviewEditButtonIcon {
+  color: var(--m-primary) !important;
+}
+
+/* Resend Code Link */
+.cl-formResendCodeLink,
+.cl-verificationLink {
+  color: var(--m-primary) !important;
+  font-weight: 700 !important;
+  transition: color 0.2s ease !important;
+}
+
+.cl-formResendCodeLink:hover,
+.cl-verificationLink:hover {
+  color: var(--m-primary-hover) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MOBILE PHONES & TOUCH SCREEN PERFECTION
+   - Prevents auto-zoom on iOS Safari (16px base font on mobile inputs)
+   - Smooth kinetic touch momentum scrolling
+   - Safe-area inset support (iPhone notch & dynamic island)
+   - Tactile active feedback without sticky hover states
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GLOBAL RESPONSIVE BASE & SMARTPHONE VIEWPORT ADAPTATION
+   - Universal border-box to prevent padding from expanding containers beyond 100%
+   - Prevents horizontal blowouts across the entire site
+   - Ensures responsive container scaling
+   ═══════════════════════════════════════════════════════════════════════════ */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: hidden !important;
+  position: relative;
+  box-sizing: border-box;
+}
+
+#root, .dreamit-dash {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: hidden !important;
+  position: relative;
+  box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+  html, body {
+    overflow-x: hidden !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    -webkit-text-size-adjust: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Prevent iOS input auto-zoom by ensuring minimum 16px font */
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* Fast, crisp tap response */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Responsive bottom safe-area for mobile navigation */
+  .pb-safe {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+  }
+
+  /* Touch-optimized button hit areas */
+  button, a {
+    touch-action: manipulation;
+  }
+}
+
+/* Hover-only styles for desktop pointers */
+@media (hover: hover) and (pointer: fine) {
+  .dreamit-dash .feature-zoom:hover,
+  .dreamit-dash .feature-card:hover,
+  .dreamit-dash .feature-widget:hover {
+    transform: scale(1.018) translateY(-2px);
+    box-shadow: 0 10px 26px -4px rgba(0, 0, 0, 0.08);
+    z-index: 2;
+  }
+
+  .dreamit-dash .feature-chip:hover {
+    transform: scale(1.035);
+  }
+}
+
+/* Mobile & Touch active states (instant tactile press feedback) */
+@media (hover: none) or (pointer: coarse) {
+  .dreamit-dash .feature-zoom:active,
+  .dreamit-dash .feature-card:active,
+  .dreamit-dash .feature-chip:active {
+    transform: scale(0.985);
+    transition: transform 0.1s ease;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LOW-RAM & PERFORMANCE OPTIMIZATIONS (CSS Containment & DOM Pruning)
+   - content-visibility: auto skips layout & painting for off-screen cards
+   - contain-intrinsic-size reserves height to eliminate scrollbar jumping
+   ═══════════════════════════════════════════════════════════════════════════ */
+.contain-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 90px;
+}
+
+.contain-task {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+}
+
+.contain-note {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
+.contain-chat {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 70px;
+}
+
+.contain-schedule {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 60px;
+}
+
+.section-contain {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 650px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anti-gravity {
+    animation: none !important;
+  }
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── AI Chat & Study KaTeX Math Typography ─── */
+.katex-display {
+  margin: 1.25rem 0 !important;
+  padding: 0.35rem 0 !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.katex {
+  font-size: 1.05em;
+  line-height: normal;
+}
